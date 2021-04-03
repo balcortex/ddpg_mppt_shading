@@ -127,3 +127,11 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# MATLAB
+{*
+dig
+slprj
+*.original
+*.slxc
+*.autosave
