@@ -1,5 +1,8 @@
 from pathlib import Path
 from typing import Any, Dict, Union
+import datetime
+
+import pandas as pd
 
 
 def save_dic_txt(
@@ -26,16 +29,38 @@ def read_dic_txt(path: Union[str, Path], sep: str = ":") -> Dict[str, str]:
         return {key: val for line in f for key, val in [line.strip("\n").split(sep)]}
 
 
+def date_steps(
+    start: datetime.datetime, step: datetime.timedelta, steps: int, as_str: bool = False
+):
+    for _ in range(steps):
+        yield start if not as_str else str(start)
+        start += step
+
+
+def csv_to_dataframe(path: Union[Path, str]) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    df["Date"] = pd.to_datetime(df["Date"])
+    df.set_index("Date", drop=True, inplace=True)
+    return df
+
+
 if __name__ == "__main__":
-    dic = {
-        "bel": "hola",
-        # "bal": "(a,b,c)",
-        # "bol": "(e,f,c)",
-        "bil": "(j,f,c)",
-        "bul": "(j,f,c)",
-    }
-    save_dic_txt(dic, "temp.txt", overwrite=False)
+    # dic = {
+    #     "bel": "hola",
+    #     # "bal": "(a,b,c)",
+    #     # "bol": "(e,f,c)",
+    #     "bil": "(j,f,c)",
+    #     "bul": "(j,f,c)",
+    # }
+    # save_dic_txt(dic, "temp.txt", overwrite=False)
 
-    dic_new = read_dic_txt("temp.txt")
+    # dic_new = read_dic_txt("temp.txt")
 
-    dic == dic_new
+    # dic == dic_new
+
+    for i in date_steps(
+        start=datetime.datetime(2020, 1, 1, 8),
+        step=datetime.timedelta(minutes=10),
+        steps=10,
+    ):
+        print(i)

@@ -13,6 +13,16 @@ from src.pymlab import MATLABHandler
 
 MATLAB_SOURCE_PATH = Path("src\matlab").resolve()
 SIMULINK_MODEL_NAME = "pv_boost_avg_rload"
+SIM_PARAMS = {
+    "irradiance": [1000, 400, 300, 1000],
+    "ambient_temperature": [40, 40, 40, 40],
+    "capacitor_initial_voltage": 0,
+    "dc_bus_voltage": 48,
+    "rload_resistance": 80,
+    "duty_cycle": 0,
+    "stop_time": 1e-3,
+    "diode_state": [True] * 4,
+}
 
 
 class SimulinkModelOutput(NamedTuple):
@@ -49,7 +59,7 @@ class ShadedIVCurve(NamedTuple):
     duty_cycle: Tuple[numbers.Real]
 
 
-class PVSystemShaded:
+class ShadedArray:
     """Photovoltaic System under partial shading
 
     Parameters:
@@ -78,7 +88,7 @@ class PVSystemShaded:
         matlab_source_path: Path,
         simulink_model_name: str,
         sim_params: Dict[str, Any],
-    ) -> None:
+    ):
         self.mh = mh
         # Get this variables from MATLAB's workspace after ruuning the simulink model
         self._vars = ("I_PV", "V_PV", "V_MOD1", "V_MOD2", "V_MOD3", "V_MOD4", "duty")
@@ -148,6 +158,8 @@ class PVSystemShaded:
 
     def set_duty_cycle(self, duty_cycle: numbers.Real) -> None:
         """Set the duty cycle of the DC-DC converter"""
+        duty_cycle = min(max(duty_cycle, 0), 1)  # clip between [0, 1]
+        duty_cycle = round(duty_cycle, 2)
         self.sim_params.update({"duty_cycle": duty_cycle})
         self.mh.eval_args(
             "set_param", f"'pv_boost_avg_rload/Duty Cycle', 'Value', '{duty_cycle}'"
@@ -283,6 +295,11 @@ class PVSystemShaded:
         """Return the current values of the modules' irradiance"""
         return self.sim_params["irradiance"]
 
+    @property
+    def num_modules(self) -> int:
+        """"Number of PV Modules in the system"""
+        return len(self.g)
+
     @staticmethod
     def power(
         voltage: Union[numbers.Real, Sequence[numbers.Real]],
@@ -309,26 +326,18 @@ class PVSystemShaded:
         """Add the simulation result to the cache dictionary"""
         self.cache[self.key] = str(output)
 
+    @classmethod
+    def get_default_array(cls) -> ShadedArray:
+        return cls(
+            mh=MATLABHandler("MATLAB42"),
+            matlab_source_path=MATLAB_SOURCE_PATH,
+            simulink_model_name=SIMULINK_MODEL_NAME,
+            sim_params=SIM_PARAMS,
+        )
+
 
 if __name__ == "__main__":
-
-    mh = MATLABHandler("MATLAB42")
-    sim_params = {
-        "irradiance": [1000, 400, 300, 1000],
-        "ambient_temperature": [40, 40, 40, 40],
-        "capacitor_initial_voltage": 0,
-        "dc_bus_voltage": 48,
-        "rload_resistance": 80,
-        "duty_cycle": 0,
-        "stop_time": 1e-3,
-        "diode_state": [True] * 4,
-    }
-    pvsyss = PVSystemShaded(
-        mh=mh,
-        matlab_source_path=MATLAB_SOURCE_PATH,
-        simulink_model_name=SIMULINK_MODEL_NAME,
-        sim_params=sim_params,
-    )
+    pvsyss = ShadedArray.get_default_array()
     a = pvsyss.run()
 
     mpp = pvsyss.get_mpp()
