@@ -20,7 +20,7 @@ SIM_PARAMS = {
     "dc_bus_voltage": 48,
     "rload_resistance": 80,
     "duty_cycle": 0,
-    "stop_time": 1e-3,
+    "stop_time": 0.1,
     "diode_state": [True] * 4,
 }
 
@@ -102,13 +102,19 @@ class ShadedArray:
         self.sim_params = dict()
         self.set_params(sim_params)
 
+        # self._last_cap_voltage = 0.0
+
         self.cache_path = matlab_source_path.joinpath(simulink_model_name + ".txt")
         if not self.cache_path.exists():
             self.cache_path.touch()
         self.cache = utils.read_dic_txt(self.cache_path)
 
-    def set_params(self, params: Dict[str, Any]) -> None:
-        """Update the simulation parameters with a Dictionary"""
+    def set_params(self, params: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Update the simulation parameters with a Dictionary. If a Dict is not
+        provided, update the paramaters in Simulink using the instance's dict.
+        """
+        params = params or self.sim_params
         for key, val in params.items():
             fn = self.__getattribute__("set_" + key)
             fn(val)
@@ -128,15 +134,13 @@ class ShadedArray:
         """Provide the ambient temperature for each of the modules and estimate the modules' temperature based on the irradiance"""
         if irradiances:
             self.set_irradiance(irradiances)
-        cell_temp = self.cell_temp_from_ambient(self.g, temperatures)
         self.sim_params.update({"ambient_temperature": tuple(temperatures)})
-        self.sim_params.update({"cell_temperature": tuple(cell_temp)})
         command_template = "'pv_boost_avg_rload/Temperature {}', 'Value', '{}'"
-        for idx, t in enumerate(cell_temp, start=1):
+        for idx, t in enumerate(self.cell_t, start=1):
             self.mh.eval_args("set_param", command_template.format(idx, t))
 
     def set_capacitor_initial_voltage(self, voltage: numbers.Real) -> None:
-        """Set the capacitor initial voltage. This feature is used to preserve the state between simulations"""
+        """Set the capacitor initial voltage"""
         self.sim_params.update({"capacitor_initial_voltage": voltage})
         self.mh.eval_args(
             "set_param", f"'pv_boost_avg_rload/C', 'InitialVoltage', '{voltage}'"
@@ -158,8 +162,6 @@ class ShadedArray:
 
     def set_duty_cycle(self, duty_cycle: numbers.Real) -> None:
         """Set the duty cycle of the DC-DC converter"""
-        duty_cycle = min(max(duty_cycle, 0), 1)  # clip between [0, 1]
-        duty_cycle = round(duty_cycle, 2)
         self.sim_params.update({"duty_cycle": duty_cycle})
         self.mh.eval_args(
             "set_param", f"'pv_boost_avg_rload/Duty Cycle', 'Value', '{duty_cycle}'"
@@ -194,20 +196,20 @@ class ShadedArray:
         ambient_temperature: Optional[Sequence[numbers.Real]] = None,
     ) -> SimulinkModelOutput:
         """Specify the simulation parameters and return the result"""
-        if duty_cycle:
-            self.set_duty_cycle(duty_cycle)
+        if duty_cycle is not None:
+            duty_cycle = min(max(duty_cycle, 0), 1)  # clip between [0, 1]
+            duty_cycle = round(duty_cycle, 2)
+            self.sim_params.update({"duty_cycle": duty_cycle})
         if irradiance:
-            self.set_irradiance(irradiance)
+            self.sim_params.update({"irradiance": tuple(irradiance)})
         if ambient_temperature:
-            self.set_ambient_temperature(ambient_temperature)
+            self.sim_params.update({"ambient_temperature": tuple(ambient_temperature)})
 
         if self.is_cached:
-            res = SimulinkModelOutput.from_string(self.cache[self.key])
-            self.set_capacitor_initial_voltage(res.voltage)
-            return res
+            return SimulinkModelOutput.from_string(self.cache[self.key])
 
+        self.set_params()
         res = self.run()
-        self.set_capacitor_initial_voltage(res.voltage)
         self._add_to_cache(res)
         self.save_cache_dic()
 
@@ -228,13 +230,16 @@ class ShadedArray:
         irradiance: Optional[Sequence[numbers.Real]] = None,
         ambient_temperature: Optional[Sequence[numbers.Real]] = None,
         curve_points: int = 100,
+        verbose: bool = False,
     ) -> ShadedIVCurve:
         """Get the IV curve for the PV system and each of its modules"""
         # Update the parameters if given
         self.simulate(duty_cycle, irradiance, ambient_temperature)
 
         curves = list()
-        for dc in tqdm(range(0, curve_points + 1)[::-1], desc="IV Curve"):
+        for dc in tqdm(
+            range(0, curve_points + 1)[::-1], desc="IV Curve", disable=not verbose
+        ):
             res = self.simulate(duty_cycle=dc / curve_points)
             curves.append(res)
 
@@ -247,12 +252,13 @@ class ShadedArray:
         irradiance: Optional[Sequence[numbers.Real]] = None,
         ambient_temperature: Optional[Sequence[numbers.Real]] = None,
         curve_points: int = 100,
+        verbose: bool = False,
     ) -> SimulinkModelOutput:
         """Compute the MPP"""
         # Update the parameters if given
         self.simulate(duty_cycle, irradiance, ambient_temperature)
 
-        curves = self.get_shaded_iv_curve(curve_points)
+        curves = self.get_shaded_iv_curve(curve_points, verbose=verbose)
         power = self.power(curves.current, curves.voltage)
         idx = np.argmax(power)
 
@@ -296,6 +302,16 @@ class ShadedArray:
         return self.sim_params["irradiance"]
 
     @property
+    def amb_t(self) -> Sequence[numbers.Real]:
+        """Return the current ambient temperature for each module"""
+        return self.sim_params["ambient_temperature"]
+
+    @property
+    def cell_t(self) -> Sequence[numbers.Real]:
+        """Return the modules' temperature"""
+        return self.cell_temp_from_ambient(self.g, self.amb_t)
+
+    @property
     def num_modules(self) -> int:
         """"Number of PV Modules in the system"""
         return len(self.g)
@@ -322,10 +338,6 @@ class ShadedArray:
             np.array(ambient_temp) + (noct - 20) * (np.array(irradiance) / g_ref)
         ).round(decimals)
 
-    def _add_to_cache(self, output: SimulinkModelOutput) -> None:
-        """Add the simulation result to the cache dictionary"""
-        self.cache[self.key] = str(output)
-
     @classmethod
     def get_default_array(cls) -> ShadedArray:
         return cls(
@@ -335,10 +347,18 @@ class ShadedArray:
             sim_params=SIM_PARAMS,
         )
 
+    def _add_to_cache(self, output: SimulinkModelOutput) -> None:
+        """Add the simulation result to the cache dictionary"""
+        self.cache[self.key] = str(output)
+
 
 if __name__ == "__main__":
     pvsyss = ShadedArray.get_default_array()
-    a = pvsyss.run()
+    pvsyss.simulate(
+        duty_cycle=0.0,
+        irradiance=[400, 400, 400, 1000],
+        ambient_temperature=[20, 25, 25, 20],
+    )
 
     mpp = pvsyss.get_mpp()
     curve = pvsyss.get_shaded_iv_curve(curve_points=100)
@@ -347,4 +367,7 @@ if __name__ == "__main__":
     plt.show()
     plt.plot(curve.voltage, pvsyss.power(curve.voltage, curve.current))
     plt.plot(mpp.voltage, pvsyss.power(mpp.voltage, mpp.current), "o")
+    plt.show()
+
+    plt.plot(curve.duty_cycle, pvsyss.power(curve.voltage, curve.current))
     plt.show()

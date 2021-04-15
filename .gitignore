@@ -135,3 +135,6 @@ slprj
 *.original
 *.slxc
 *.autosave
+
+# project
+default

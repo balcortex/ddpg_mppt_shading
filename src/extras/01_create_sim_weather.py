@@ -53,10 +53,10 @@ def make_synthetic_weather(
 if __name__ == "__main__":
     df = make_synthetic_weather(
         modules=4,
-        irradiance=[0, 200, 400, 600, 800, 1000],
+        irradiance=[200, 400, 600, 800, 1000],
         amb_temperature=[20, 25],
         num_choices=3,
-        size=4,
+        size=100,
         initial_date=datetime.datetime(2020, 1, 1, 8),
     )
 

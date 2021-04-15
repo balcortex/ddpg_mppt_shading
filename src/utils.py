@@ -1,5 +1,6 @@
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, Sequence, Union, Generator
+import itertools
 import datetime
 
 import pandas as pd
@@ -42,6 +43,17 @@ def csv_to_dataframe(path: Union[Path, str]) -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"])
     df.set_index("Date", drop=True, inplace=True)
     return df
+
+
+def grid_generator(dic: Dict[Any, Any]) -> Generator[Dict[Any, Any], None, None]:
+    "Perform permutation on the values of a dictionary"
+    # Check if val is a Sequence
+    for key, val in dic.items():
+        if not isinstance(val, Sequence):
+            dic[key] = [val]
+
+    keys, values = zip(*dic.items())
+    return (dict(zip(keys, v)) for v in itertools.product(*values))
 
 
 if __name__ == "__main__":
