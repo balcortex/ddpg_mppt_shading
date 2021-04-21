@@ -47,9 +47,12 @@ def csv_to_dataframe(path: Union[Path, str]) -> pd.DataFrame:
 
 def grid_generator(dic: Dict[Any, Any]) -> Generator[Dict[Any, Any], None, None]:
     "Perform permutation on the values of a dictionary"
+    if not dic:
+        return ({},)
+
     # Check if val is a Sequence
     for key, val in dic.items():
-        if not isinstance(val, Sequence):
+        if not isinstance(val, Sequence) or isinstance(val, str):
             dic[key] = [val]
 
     keys, values = zip(*dic.items())

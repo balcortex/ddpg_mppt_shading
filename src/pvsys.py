@@ -4,6 +4,7 @@ import numbers
 from pathlib import Path
 from typing import Any, Dict, NamedTuple, Optional, Sequence, Tuple, Union
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
@@ -97,7 +98,7 @@ class ShadedArray:
 
         # Initialize MATLAB
         self.mh.eval_args("cd", f"'{str(matlab_source_path)}'")
-        self.mh.eval(f"model='{simulink_model_name}'")
+        self.mh.eval(f"model='{simulink_model_name}';")
         self.mh.eval_args("load_system", "model")
         self.sim_params = dict()
         self.set_params(sim_params)
@@ -269,6 +270,9 @@ class ShadedArray:
             duty_cycle=curves.duty_cycle[idx],
         )
 
+    def quit(self) -> None:
+        self.mh.quit()
+
     @property
     def simulation_output(self) -> SimulinkModelOutput:
         """Return the output of the last simulation run"""
@@ -338,8 +342,58 @@ class ShadedArray:
             np.array(ambient_temp) + (noct - 20) * (np.array(irradiance) / g_ref)
         ).round(decimals)
 
+    @staticmethod
+    def plot_mpp_curve(
+        curve: ShadedIVCurve, type_: str = "iv"
+    ) -> matplotlib.figure.Figure:
+        """
+        Plot a MPP curve, type_: [`iv`, `pv`, `pd`]
+            iv: current-voltage curve
+            pv: power-voltge curve
+            pd: power-duty cycle curve
+        """
+
+        mpp = ShadedArray.mpp_from_curve(curve)
+
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+
+        if type_ == "iv":
+            ax.plot(curve.voltage, curve.current)
+            ax.plot(mpp.voltage, mpp.current, "o")
+            ax.set_xlabel("Voltage (V)")
+            ax.set_ylabel("Current (A)")
+        elif type_ == "pv":
+            ax.plot(curve.voltage, ShadedArray.power(curve.voltage, curve.current))
+            ax.plot(mpp.voltage, ShadedArray.power(mpp.voltage, mpp.current), "o")
+            ax.set_xlabel("Voltage (V)")
+            ax.set_ylabel("Power (W)")
+        elif type_ == "pd":
+            ax.plot(curve.duty_cycle, ShadedArray.power(curve.voltage, curve.current))
+            ax.plot(mpp.duty_cycle, ShadedArray.power(mpp.voltage, mpp.current), "o")
+            ax.set_xlabel("Duty Cycle")
+            ax.set_ylabel("Power (W)")
+        else:
+            raise ValueError(f"Type {type_} not recognized")
+
+        return fig
+
+    @staticmethod
+    def mpp_from_curve(curve: ShadedIVCurve) -> SimulinkModelOutput:
+        """Return the MPP of a given curve"""
+        power = ShadedArray.power(curve.current, curve.voltage)
+        idx = np.argmax(power)
+
+        return MPP(
+            current=curve.current[idx],
+            voltage=curve.voltage[idx],
+            power=power[idx],
+            duty_cycle=curve.duty_cycle[idx],
+        )
+
     @classmethod
     def get_default_array(cls) -> ShadedArray:
+        """Return a PVShadedArray with default options"""
         return cls(
             mh=MATLABHandler("MATLAB42"),
             matlab_source_path=MATLAB_SOURCE_PATH,
@@ -356,18 +410,11 @@ if __name__ == "__main__":
     pvsyss = ShadedArray.get_default_array()
     pvsyss.simulate(
         duty_cycle=0.0,
-        irradiance=[400, 400, 400, 1000],
+        irradiance=[800, 800, 200, 200],
         ambient_temperature=[20, 25, 25, 20],
     )
-
-    mpp = pvsyss.get_mpp()
     curve = pvsyss.get_shaded_iv_curve(curve_points=100)
-    plt.plot(curve.voltage, curve.current)
-    plt.plot(mpp.voltage, mpp.current, "o")
-    plt.show()
-    plt.plot(curve.voltage, pvsyss.power(curve.voltage, curve.current))
-    plt.plot(mpp.voltage, pvsyss.power(mpp.voltage, mpp.current), "o")
-    plt.show()
 
-    plt.plot(curve.duty_cycle, pvsyss.power(curve.voltage, curve.current))
-    plt.show()
+    fig1 = ShadedArray.plot_mpp_curve(curve, type_="iv")
+    fig2 = ShadedArray.plot_mpp_curve(curve, type_="pv")
+    fig3 = ShadedArray.plot_mpp_curve(curve, type_="pd")

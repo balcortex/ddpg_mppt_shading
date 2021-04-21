@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, NamedTuple, Optional, Sequence, Tuple, Union
 
 import gym
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from gym import spaces
@@ -21,16 +22,20 @@ DEFAULT_STATES = (
     "norm_voltage",
     "norm_delta_voltage",
     "norm_power",
+    "norm_delta_power",
     "duty_cycle",
     "delta_duty_cycle",
 )
 DEFAULT_LOG_STATES = (
+    "norm_voltage",
+    "norm_delta_voltage",
     "power",
     "optimum_power",
     "date",
     "optimum_duty_cycle",
+    "voltage",
+    "delta_voltage",
     "delta_power",
-    "norm_delta_power",
 )
 DEFAULT_PLOT_STATES = {
     # key -> filename, val -> plot from df
@@ -100,9 +105,18 @@ class ShadedPVEnv(CustomEnv):
     """PV system under partial shading that implements the openAI gym interface
 
     Parameters
-        - state: List of strings. Add `norm_` to `state` to get a normalized state.
-                Add `delta_` to get the difference of the actual state wrt the last.
-            - Possible states: "voltage", "power", "date", "duty_cycle", "duty_cycle"
+        - pvarray: The pvarray
+        - weather_df: DataFrame containg the weather to perform the simulations
+        - states: List of strings. Return these states as the observations
+            Add `norm_` to `state` to get a normalized state.
+            Add `delta_` to get the difference of the actual state wrt the last.
+            Possible states: "voltage", "power", "date", "duty_cycle", "duty_cycle"
+        - log_states: List of strings. Return these states in the info dictionary.
+        - dic_normalizer: Provide a dic with the maximum values of the states to perform
+            normalization.
+        - log_path: Path to save the csv files and png images
+        - plot_states: Plot the states in the dictionary. The key is used as a filename
+            and the values are the states to be plotted.
     """
 
     def __init__(
@@ -123,7 +137,7 @@ class ShadedPVEnv(CustomEnv):
         self._history = defaultdict(list)
         self._row_idx = -1
 
-        # like set, but ordered
+        # like set, but ordered  ->  avoid repetition on states and log states
         self._name_all_states = {
             k: None for k in itertools.chain(states, log_states)
         }.keys()
@@ -148,6 +162,7 @@ class ShadedPVEnv(CustomEnv):
         """Reset the environment"""
         self._save_history()
         self._history.clear()
+        self._weather_comb = {}  # save all the unique weather combinations (ordered)
         self._action: np.ndarray = self.action_space.sample() * 0
         self._row_idx = -1
 
@@ -166,6 +181,7 @@ class ShadedPVEnv(CustomEnv):
             ambient_temperature=self._current_amb_t,
         )
         self._add_history(res)
+        self._weather_comb[(self._current_g, self._current_amb_t)] = None
 
         self._done = self._row_idx == len(self.weather_df) - 1
         info = self.log_state_as_tuple._asdict()
@@ -205,7 +221,7 @@ class ShadedPVEnv(CustomEnv):
             name = state_name.replace("delta_", "")
             return (
                 0
-                if self._row_idx == 0
+                if self._row_idx <= 0
                 else (
                     self._resolve_state(result, name)
                     - self._history[name][self._row_idx - 1]
@@ -245,6 +261,14 @@ class ShadedPVEnv(CustomEnv):
             for k, v in self._dic_plot_states.items():
                 self._plot_state_df(k, v)
 
+            # Efficiency
+            df = self.to_dataframe(self.history_all, rename_cols=False)
+            max_p = np.array(df["optimum_power"])
+            p = np.array(df["power"])
+            eff = np.mean(p / max_p) * 100
+            with open(self.path.joinpath("efficiency.txt"), "a") as f:
+                f.write(f"{self.time}:{eff:.2f}\n")
+
             print(f"Saved to {path}")
 
     def _plot_state_df(self, name: str, states: Union[str, Sequence[str]]) -> None:
@@ -254,6 +278,9 @@ class ShadedPVEnv(CustomEnv):
         fig = ax.get_figure()
         fig.savefig(self.path.joinpath(f"{self.time}_{name}.png"))
         plt.close()
+
+    def quit(self) -> None:
+        self.pvarray.quit()
 
     @property
     def done(self) -> bool:
@@ -313,7 +340,7 @@ class ShadedPVEnv(CustomEnv):
     def _current_g(self) -> Sequence[numbers.Number]:
         """Values of irradiance for the taken step"""
         val = self.weather_df.iloc[self._row_idx][self._key_cols["irradiance"]].values
-        return list(val)
+        return tuple(val)
 
     @property
     def _current_amb_t(self) -> Sequence[numbers.Number]:
@@ -321,11 +348,20 @@ class ShadedPVEnv(CustomEnv):
         val = self.weather_df.iloc[self._row_idx][
             self._key_cols["amb_temperature"]
         ].values
-        return list(val)
+        return tuple(val)
 
     @property
     def time(self) -> str:
+        """Return the time when reset() was called last"""
         return self._now
+
+    @property
+    def unique_weathers(self) -> Tuple[Tuple[Tuple[numbers.Real, ...]]]:
+        """
+        Return all the unique combinations of irradiance and temperature in the
+        weather dataframe
+        """
+        return tuple(self._weather_comb.keys())
 
     @classmethod
     def get_default_env(cls) -> ShadedPVEnv:
@@ -348,7 +384,7 @@ class ShadedPVEnv(CustomEnv):
         num_envs,
         log_path: Optional[Path] = None,
         env_names: Optional[Sequence[str]] = None,
-    ) -> Sequence[ShadedPVEnv]:
+    ) -> Union[ShadedPVEnv, Sequence[ShadedPVEnv]]:
         """Get a sequence of ShadedPVEnvs, each one logged to a different folder"""
         pvarray = ShadedArray.get_default_array()
         weather_df = utils.csv_to_dataframe(DEFAULT_WEATHER_PATH)
@@ -377,10 +413,14 @@ class ShadedPVEnv(CustomEnv):
             for path in paths
         ]
 
+        if len(envs) == 1:
+            return envs[0]
+
         return envs
 
     @staticmethod
     def to_dataframe(dic: Dict[Any, Any], rename_cols: bool = True) -> pd.DataFrame:
+        """Convert a dictionary with PV states to a dataframe"""
         df = pd.DataFrame(dic)
 
         # Rename `delta_voltage` -> `Delta Voltage`
@@ -395,97 +435,3 @@ class ShadedPVEnv(CustomEnv):
             df.set_index("Date", drop=True, inplace=True)
 
         return df
-
-
-def exp(model_name, common_kwargs: Dict[Any, Any], kwargs: Dict[Any, Any]) -> None:
-    path = Path(f"default/{model_name}")
-    train_env, test_env = ShadedPVEnv.get_envs(
-        num_envs=2, log_path=path, env_names=["train", "test"]
-    )
-    c_kwargs = common_kwargs.copy()
-
-    c_kwargs.update(kwargs)
-    utils.save_dic_txt(
-        {k: str(v) for k, v in c_kwargs.items()},
-        train_env.path.joinpath("config.txt"),
-        overwrite=True,
-    )
-    model = getattr(stable_baselines3, model_name)(env=train_env, **c_kwargs)
-
-    for _ in range(10):
-        model.learn(total_timesteps=1000)
-
-        obs = test_env.reset()
-        done = False
-        while not done:
-            action, _states = model.predict(obs, deterministic=True)
-            obs, reward, done, info = test_env.step(action)
-            # env.render()
-
-        # # env.close()
-        # # f = plt.figure()
-        # # ax = f.add_subplot(111)
-        # # ax.plot(df['Date'], df[''])
-        # df = env.to_dataframe(env.history_all)
-        # df.plot(y=["Power", "Optimum Power"])
-        # plt.show()
-        # plt.close()
-        # ax = df.plot(y=["Power", "Optimum Power"])
-        # fig = ax.get_figure()
-        # fig.savefig(env.path.joinpath(f"{env.time}_power.png"))
-        # plt.close()
-
-        # df.plot(y=["Duty Cycle", "Optimum Duty Cycle"])
-        # plt.show()
-        # plt.close()
-        # ax = df.plot(y=["Duty Cycle", "Optimum Duty Cycle"])
-        # fig = ax.get_figure()
-        # fig.savefig(env.path.joinpath(f"{env.time}_duty.png"))
-        # plt.close()
-
-        # env.reset()
-
-    return model
-
-
-if __name__ == "__main__":
-    import gym
-    import matplotlib.pyplot as plt
-    import stable_baselines3
-    from stable_baselines3.common.noise import NormalActionNoise
-
-    from src import utils
-
-    common_kwargs = {
-        "policy": "MlpPolicy",
-        "verbose": 0,
-        "device": "cpu",
-        "learning_rate": 1e-4,
-        "gamma": 0.01,
-    }
-    kwargs = {
-        "DDPG": {
-            "action_noise": [
-                NormalActionNoise(np.array([0.0]), np.array([0.1])),
-                NormalActionNoise(np.array([0.0]), np.array([0.2])),
-                NormalActionNoise(np.array([0.0]), np.array([0.3])),
-                NormalActionNoise(np.array([0.0]), np.array([0.4])),
-            ],
-        },
-        "A2C": {
-            "gae_lambda": [0.1, 0.5, 1.0],
-            "ent_coef": [0.1, 0.5, 1.0],
-            "normalize_advantage": [True, False],
-        },
-    }
-    models = [
-        "DDPG",
-        # "A2C",
-        # "PPO",
-        # "SAC",
-        # "TD3",
-    ]
-
-    for model_name in models:
-        for kw in utils.grid_generator(kwargs.get(model_name, {})):
-            model = exp(model_name, common_kwargs, kw)
