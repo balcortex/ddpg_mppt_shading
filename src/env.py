@@ -36,6 +36,7 @@ DEFAULT_LOG_STATES = (
     "voltage",
     "delta_voltage",
     "delta_power",
+    "reward",
 )
 DEFAULT_PLOT_STATES = {
     # key -> filename, val -> plot from df
@@ -158,6 +159,9 @@ class ShadedPVEnv(CustomEnv):
 
         super().__init__()
 
+    def __str__(self) -> str:
+        return f"ShadedPVEnv"
+
     def _reset(self) -> np.ndarray:
         """Reset the environment"""
         self._save_history()
@@ -243,6 +247,8 @@ class ShadedPVEnv(CustomEnv):
             return result.voltage * result.current
         elif state_name == "date":
             return str(self.weather_df.index[self._row_idx])
+        elif state_name == "reward":
+            return self.reward
 
         # No key found
         else:
@@ -280,6 +286,7 @@ class ShadedPVEnv(CustomEnv):
         plt.close()
 
     def quit(self) -> None:
+        self.reset()  # Save if anything must be saved
         self.pvarray.quit()
 
     @property

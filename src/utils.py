@@ -59,6 +59,34 @@ def grid_generator(dic: Dict[Any, Any]) -> Generator[Dict[Any, Any], None, None]
     return (dict(zip(keys, v)) for v in itertools.product(*values))
 
 
+def grid_combination(dic: Dict[Any, Any]) -> Generator[Dict[Any, Any], None, None]:
+    "Yield the value sequence of a dictionary one at a time"
+    if not dic:
+        return ({},)
+
+    # Get the maximum length of the sequence in the dict values
+    max_len = 0
+    for key, val in dic.items():
+        if not isinstance(val, Sequence) or isinstance(val, str):
+            continue
+        max_len = max(max_len, len(val))
+
+    # Make the sequences of equal length
+    for key, val in dic.items():
+        if not isinstance(val, Sequence) or isinstance(val, str):
+            dic[key] = [val] * max_len
+        elif isinstance(val, Sequence) and len(val) != max_len:
+            dic[key] = val * max_len
+
+    lens = {len(val) for val in dic.values()}
+    assert (
+        len(lens) == 1
+    ), "The sequences' length in the dict values are not equal. The dict values may be a scalar, sequence of lenght 1 or sequence of max_len"
+
+    keys, values = zip(*dic.items())
+    return (dict(zip(keys, v)) for v in zip(*values))
+
+
 if __name__ == "__main__":
     # dic = {
     #     "bel": "hola",

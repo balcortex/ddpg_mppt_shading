@@ -2,8 +2,9 @@ from pathlib import Path
 from typing import Sequence
 
 # algs = ["PO", "DDPG", "TD3", "SAC", "A2C", "PPO"]
-path = Path("default/TD3")
-txts = path.glob("*test\efficiency.txt")
+path = Path("default/po")
+# txts = path.glob("*test/efficiency.txt")
+txts = path.glob("*/efficiency.txt")
 
 effs = [f.read_text().strip().split("\n") for f in txts]
 
