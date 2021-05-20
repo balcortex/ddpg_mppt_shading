@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, Sequence, Union, Generator
+from typing import Any, Dict, Optional, Sequence, Union, Generator
 import itertools
 import datetime
 
@@ -31,11 +31,40 @@ def read_dic_txt(path: Union[str, Path], sep: str = ":") -> Dict[str, str]:
 
 
 def date_steps(
-    start: datetime.datetime, step: datetime.timedelta, steps: int, as_str: bool = False
-):
+    start: datetime.datetime,
+    step: datetime.timedelta,
+    steps: int,
+    stop: Optional[datetime.datetime] = None,
+    as_str: bool = False,
+) -> Generator[Union[str, datetime.datetime], None, None]:
+    """
+    Generate datetime objects
+
+    Parameters:
+        - start: the start date
+        - step: interval between steps
+        - steps: number of steps
+        - stop: start a new day if the current datetime is equal to stop
+        - as_str: the output is plain str
+    """
+    start_ = start
+    stop_ = stop
     for _ in range(steps):
         yield start if not as_str else str(start)
         start += step
+        if start == stop:
+            start_ += datetime.timedelta(days=1)
+            stop_ += datetime.timedelta(days=1)
+            start = start_
+            stop = stop_
+
+
+# def date_steps(
+#     start: datetime.datetime, step: datetime.timedelta, steps: int, as_str: bool = False
+# ):
+#     for _ in range(steps):
+#         yield start if not as_str else str(start)
+#         start += step
 
 
 def csv_to_dataframe(path: Union[Path, str]) -> pd.DataFrame:
@@ -54,6 +83,23 @@ def grid_generator(dic: Dict[Any, Any]) -> Generator[Dict[Any, Any], None, None]
     for key, val in dic.items():
         if not isinstance(val, Sequence) or isinstance(val, str):
             dic[key] = [val]
+
+    keys, values = zip(*dic.items())
+    return (dict(zip(keys, v)) for v in itertools.product(*values))
+
+
+def grid_generator_nested(dic: Dict[Any, Any]) -> Generator[Dict[Any, Any], None, None]:
+    "Perform permutation on the values of a dictionary"
+    if not dic:
+        return ({},)
+
+    # Check if val is a Sequence
+    for key, val in dic.items():
+        if not isinstance(val, Sequence) or isinstance(val, str):
+            dic[key] = [val]
+
+        if isinstance(val, dict):
+            dic[key] = list(grid_generator(val))
 
     keys, values = zip(*dic.items())
     return (dict(zip(keys, v)) for v in itertools.product(*values))

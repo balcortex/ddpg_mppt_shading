@@ -2,9 +2,9 @@ from pathlib import Path
 from typing import Sequence
 
 # algs = ["PO", "DDPG", "TD3", "SAC", "A2C", "PPO"]
-path = Path("default/po")
-# txts = path.glob("*test/efficiency.txt")
-txts = path.glob("*/efficiency.txt")
+path = Path("default/")
+txts = path.glob("*test/efficiency.txt")
+# txts = path.glob("*/efficiency.txt")
 
 effs = [f.read_text().strip().split("\n") for f in txts]
 
@@ -18,8 +18,21 @@ def max_eff(seq: Sequence[str]) -> float:
     return max_, dates[idx]
 
 
+def last_eff(seq: Sequence[str]) -> float:
+    effs = [float(eff) for s in seq for _, eff in [s.split(":")]]
+    dates = [date for s in seq for date, _ in [s.split(":")]]
+
+    return effs[-1], dates[-1]
+
+
 max_effs = [max_eff(eff) for eff in effs]
-print(sorted(max_effs, reverse=True))
+for e in sorted(max_effs, reverse=True):
+    print(e)
+
+print()
+last_effs = [last_eff(eff) for eff in effs]
+for e in last_effs:
+    print(e)
 
 
 # Norm Reward, states = ("norm_voltage", "norm_delta_voltage", "norm_power")

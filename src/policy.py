@@ -1,10 +1,14 @@
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, Union
+from copy import deepcopy
 
-import gym
+from gym import spaces
 import numpy as np
 import torch as th
+import torch.nn as nn
 
+from src.env import ShadedPVEnv
 from src.noise import Noise
 from src.schedule import Schedule
 
@@ -14,18 +18,20 @@ class Policy(ABC):
 
     def __init__(
         self,
-        env: gym.Env,
+        action_space: spaces.Box,
         noise: Optional[Noise],
         schedule: Optional[Schedule],
         decrease_noise: bool,
     ):
-        self.env = env
+        self.action_space = action_space
         self.noise = noise
         self.schedule = schedule
         self.decrease_noise = decrease_noise
 
-        self.low = env.action_space.low[0]
-        self.high = env.action_space.high[0]
+        self.low = action_space.low[0]
+        self.high = action_space.high[0]
+
+        self.reset()
 
     @abstractmethod
     def __call__(
@@ -95,6 +101,11 @@ class Policy(ABC):
     def config_dic(self) -> Dict[str, str]:
         return {k: str(v) for k, v in self.__dict__.items()}
 
+    def as_deterministic(self) -> Policy:
+        copy_ = deepcopy(self)
+        copy_.noise = None
+        return copy_
+
 
 class RandomPolicy(Policy):
     """
@@ -104,8 +115,8 @@ class RandomPolicy(Policy):
         env: gym environment
     """
 
-    def __init__(self, env: gym.Env):
-        self.env = env
+    def __init__(self, action_space: spaces.Box):
+        self.action_space = action_space
 
     def __call__(
         self,
@@ -119,7 +130,7 @@ class RandomPolicy(Policy):
             obs: observations from the environment
             info: additional info passed to the policy (not used)
         """
-        return self.env.action_space.sample()
+        return self.action_space.sample()
 
     def __str__(self):
         return "RandomPolicy"
@@ -132,7 +143,7 @@ class PerturbObservePolicy(Policy):
 
     def __init__(
         self,
-        env: gym.Env,
+        action_space: spaces.Box,
         dc_step: float = 0.01,
         dv_key: str = "delta_voltage",
         dp_key: str = "delta_power",
@@ -141,7 +152,10 @@ class PerturbObservePolicy(Policy):
         decrease_noise: bool = False,
     ):
         super().__init__(
-            env=env, noise=noise, schedule=schedule, decrease_noise=decrease_noise
+            action_space=action_space,
+            noise=noise,
+            schedule=schedule,
+            decrease_noise=decrease_noise,
         )
 
         self.dc_step = dc_step
@@ -180,12 +194,52 @@ class PerturbObservePolicy(Policy):
 
 
 class MLPPolicy(Policy):
-    def __init__(self):
-        pass
+    """Multilayer Perceptron Policy"""
+
+    def __init__(
+        self,
+        action_space: spaces.Box,
+        net: nn.Module,
+        noise: Optional[Noise] = None,
+        schedule: Optional[Schedule] = None,
+        decrease_noise: bool = False,
+        device: str = "cpu",
+    ):
+        super().__init__(
+            action_space=action_space,
+            noise=noise,
+            schedule=schedule,
+            decrease_noise=decrease_noise,
+        )
+        self.net = net
+        self.device = device
+
+    @th.no_grad()
+    def __call__(self, obs: np.ndarray, info: Optional[Dict[str, Any]]) -> np.ndarray:
+        obs_v = th.tensor(obs, dtype=th.float32)
+        actions = self.net(obs_v)
+        actions = self.process_actions(actions)
+        return actions.cpu().numpy()
+
+    def unscale_actions(self, scled_actions: th.Tensor) -> th.Tensor:
+        "Unscale the actions to match the environment limits"
+        actions = self.low + (scled_actions + 1) * (self.high - self.low) / 2
+        return actions
+
+    def __str__(self) -> str:
+        return "MLPPolicy"
 
 
 if __name__ == "__main__":
     from src.env import ShadedPVEnv
 
-    env = ShadedPVEnv.get_envs(num_envs=1)
-    policy = PerturbObservePolicy(env=env, dc_step=0.01)
+    env = ShadedPVEnv.get_envs(
+        num_envs=1, env_names=["po_train"], weather_paths=["train_1_4_0.5"]
+    )
+    policy = PerturbObservePolicy(action_space=env.action_space, dc_step=0.01)
+
+    obs = env.reset()
+    info = {}
+
+    action = policy(obs, info)
+    obs, _, _, info = env.step(action)

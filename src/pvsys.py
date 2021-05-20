@@ -12,6 +12,7 @@ from tqdm import tqdm
 from src import utils
 from src.pymlab import MATLABHandler
 
+DECIMALS = 2
 MATLAB_SOURCE_PATH = Path("src\matlab").resolve()
 SIMULINK_MODEL_NAME = "pv_boost_avg_rload"
 SIM_PARAMS = {
@@ -89,8 +90,10 @@ class ShadedArray:
         matlab_source_path: Path,
         simulink_model_name: str,
         sim_params: Dict[str, Any],
+        decimals: int = DECIMALS,
     ):
         self.mh = mh
+        self.decimals = decimals
         # Get this variables from MATLAB's workspace after ruuning the simulink model
         self._vars = ("I_PV", "V_PV", "V_MOD1", "V_MOD2", "V_MOD3", "V_MOD4", "duty")
         # Variables to compose the key
@@ -199,7 +202,7 @@ class ShadedArray:
         """Specify the simulation parameters and return the result"""
         if duty_cycle is not None:
             duty_cycle = min(max(duty_cycle, 0), 1)  # clip between [0, 1]
-            duty_cycle = round(duty_cycle, 2)
+            duty_cycle = round(duty_cycle, self.decimals)
             self.sim_params.update({"duty_cycle": duty_cycle})
         if irradiance:
             self.sim_params.update({"irradiance": tuple(irradiance)})
@@ -230,7 +233,7 @@ class ShadedArray:
         duty_cycle: Optional[numbers.Real] = None,
         irradiance: Optional[Sequence[numbers.Real]] = None,
         ambient_temperature: Optional[Sequence[numbers.Real]] = None,
-        curve_points: int = 100,
+        curve_points: int = 10 ** DECIMALS,
         verbose: bool = False,
     ) -> ShadedIVCurve:
         """Get the IV curve for the PV system and each of its modules"""
@@ -252,7 +255,7 @@ class ShadedArray:
         duty_cycle: Optional[numbers.Real] = None,
         irradiance: Optional[Sequence[numbers.Real]] = None,
         ambient_temperature: Optional[Sequence[numbers.Real]] = None,
-        curve_points: int = 100,
+        curve_points: int = 10 ** DECIMALS,
         verbose: bool = False,
     ) -> SimulinkModelOutput:
         """Compute the MPP"""

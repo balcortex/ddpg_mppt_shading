@@ -10,10 +10,13 @@ from src.pvsys import ShadedArray
 SB3 = ["DDPG", "A2C", "TD3", "SAC", "PPO"]
 
 
-def exp(model_name: str, kwargs: Dict[Any, Any], iters: int = 10) -> None:
+def exp(model_name: str, kwargs: Dict[Any, Any], iters: int = 300) -> None:
     path = Path(f"default/{model_name}")
     train_env, test_env = ShadedPVEnv.get_envs(
-        num_envs=2, log_path=path, env_names=["train", "test"]
+        num_envs=2,
+        log_path=path,
+        env_names=["train", "test"],
+        weather_paths=["train_1_4_0.5", "test_1_4_0.5"],
     )
 
     utils.save_dic_txt(
@@ -73,7 +76,7 @@ def test_alg(model_name: str) -> None:
         "policy": "MlpPolicy",
         "verbose": 0,
         "device": "cpu",
-        "learning_rate": [1e-3] * 10,
+        "learning_rate": [1e-3] * 1,
         "gamma": [0.1],
     }
     kwargs = {
@@ -91,18 +94,18 @@ def test_alg(model_name: str) -> None:
             "action_noise": [
                 NormalActionNoise(np.array([0.0]), np.array([0.2])),
             ],
-            "use_sde": [True, False],
+            # "use_sde": [True, False],
         },
         "A2C": {
-            "gae_lambda": [0.1, 0.9],
-            "ent_coef": [0.1, 0.9],
-            "normalize_advantage": [True, False],
-            "use_sde": [True, False],
+            # "gae_lambda": [0.1, 0.9],
+            # "ent_coef": [0.1, 0.9],
+            # "normalize_advantage": [True, False],
+            # "use_sde": [True, False],
         },
         "PPO": {
-            "gae_lambda": [0.1, 0.9],
-            "ent_coef": [0.1, 0.9],
-            "use_sde": [True, False],
+            # "gae_lambda": [0.1, 0.9],
+            # "ent_coef": [0.1, 0.9],
+            # "use_sde": [True, False],
         },
         "PO": {"dc_step": 0.01},
     }
@@ -129,9 +132,9 @@ if __name__ == "__main__":
         "PO",
         "DDPG",
         "TD3",
-        # "SAC",
-        # "A2C",
-        # "PPO",
+        "SAC",
+        "A2C",
+        "PPO",
     ]
     for alg in algs:
         test_alg(alg)

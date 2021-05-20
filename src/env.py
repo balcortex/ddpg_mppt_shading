@@ -17,16 +17,15 @@ from gym import spaces
 from src import utils
 from src.pvsys import ShadedArray, SimulinkModelOutput
 
-DEFAULT_WEATHER_PATH = Path("data/synthetic_weather.csv")
+DEFAULT_WEATHER_PATH = Path("data/synthetic_weather_test.csv")
 DEFAULT_STATES = (
     "norm_voltage",
-    "norm_delta_voltage",
     "norm_power",
     "norm_delta_power",
-    "duty_cycle",
-    "delta_duty_cycle",
 )
 DEFAULT_LOG_STATES = (
+    "duty_cycle",
+    "delta_duty_cycle",
     "norm_voltage",
     "norm_delta_voltage",
     "power",
@@ -36,15 +35,18 @@ DEFAULT_LOG_STATES = (
     "voltage",
     "delta_voltage",
     "delta_power",
+    "norm_power",
+    "norm_delta_power",
     "reward",
 )
 DEFAULT_PLOT_STATES = {
     # key -> filename, val -> plot from df
-    "power": ("power", "optimum_power"),
+    # "power": ("power", "optimum_power"),
     "duty_cycle": ("duty_cycle", "optimum_duty_cycle"),
 }
 DEFAULT_NORM_DIC = {"power": 200, "voltage": 36}
 DEFAULT_LOG_PATH = Path("default")
+DEFAULT_REWARD = 3
 
 
 class CustomEnv(gym.Env, abc.ABC):
@@ -102,6 +104,34 @@ class CustomEnv(gym.Env, abc.ABC):
         raise NotImplementedError
 
 
+class DummyEnv(CustomEnv):
+    def __init__(self, max_steps: int = 100):
+        self.max_steps = max_steps
+        super().__init__()
+
+    def _reset(self) -> np.ndarray:
+        """Reset the environment"""
+        self.cur_step = 0
+        return np.array([self.step])
+
+    def _step(
+        self, action: np.ndarray
+    ) -> Tuple[np.ndarray, numbers.Real, bool, Dict[Any, Any]]:
+        """Play a step in the environment"""
+        self.cur_step += 1
+
+        return np.array([self.cur_step]), 1.0, self.cur_step == self.max_steps, {}
+
+    def _get_action_space(self) -> spaces.Space:
+        """Return the action space"""
+        # The action space is the perturbation applied to the DC-DC converter
+        return spaces.Box(low=-1, high=1, shape=(1,))
+
+    def _get_observation_space(self) -> spaces.Space:
+        """Return the observation space"""
+        return spaces.Box(low=np.array([0]), high=np.array([self.max_steps]))
+
+
 class ShadedPVEnv(CustomEnv):
     """PV system under partial shading that implements the openAI gym interface
 
@@ -118,6 +148,9 @@ class ShadedPVEnv(CustomEnv):
         - log_path: Path to save the csv files and png images
         - plot_states: Plot the states in the dictionary. The key is used as a filename
             and the values are the states to be plotted.
+        - reward:   0 -> norm_delta_power
+                    1 -> max(norm_delta_power, 0)
+                    2 -> -1 if norm_delta_power < 0, else norm_delta_power
     """
 
     def __init__(
@@ -129,14 +162,17 @@ class ShadedPVEnv(CustomEnv):
         dic_normalizer: Optional[Dict[str, numbers.Real]] = None,
         log_path: Optional[Path] = None,
         plot_states: Optional[Dict[str, Union[str, Sequence[str]]]] = None,
+        reward: int = 2,
     ):
         self.pvarray = pvarray
-        self.weather_df = weather_df
+        self.weather_dfs = [df for _, df in weather_df.groupby(weather_df.index.date)]
+        # self.weather_df = weather_df
         self._name_states = states
         self._name_log_states = log_states
         self._dic_plot_states = plot_states
         self._history = defaultdict(list)
         self._row_idx = -1
+        self._day_idx = -1
 
         # like set, but ordered  ->  avoid repetition on states and log states
         self._name_all_states = {
@@ -148,14 +184,19 @@ class ShadedPVEnv(CustomEnv):
 
         # List of available columns for irradiance and ambient temperature
         self._key_cols = {
-            "irradiance": [col for col in self.weather_df.columns if "Irr" in col],
-            "amb_temperature": [col for col in self.weather_df.columns if "Amb" in col],
+            "irradiance": sorted(
+                [col for col in self.weather_df.columns if "Irr" in col]
+            ),
+            "amb_temperature": sorted(
+                [col for col in self.weather_df.columns if "Amb" in col]
+            ),
         }
         # Make a namedtuple to output states
         self._StatesTuple = namedtuple("States", self._name_states)
         self._LogStatesTuple = namedtuple("LogStates", self._name_log_states)
 
         self._norm_dic = {} or dic_normalizer
+        self._reward = reward
 
         super().__init__()
 
@@ -164,6 +205,10 @@ class ShadedPVEnv(CustomEnv):
 
     def _reset(self) -> np.ndarray:
         """Reset the environment"""
+        self._day_idx += 1
+        if self._day_idx == self.available_weather_days:
+            self._day_idx = 0
+
         self._save_history()
         self._history.clear()
         self._weather_comb = {}  # save all the unique weather combinations (ordered)
@@ -275,7 +320,7 @@ class ShadedPVEnv(CustomEnv):
             with open(self.path.joinpath("efficiency.txt"), "a") as f:
                 f.write(f"{self.time}:{eff:.2f}\n")
 
-            print(f"Saved to {path}")
+            # print(f"Saved to {path}")
 
     def _plot_state_df(self, name: str, states: Union[str, Sequence[str]]) -> None:
         """Plot states the states and save to a file"""
@@ -295,7 +340,16 @@ class ShadedPVEnv(CustomEnv):
 
     @property
     def reward(self) -> numbers.Real:
-        return self._history["norm_delta_power"][-1]
+        rew = self._history["norm_delta_power"][-1]
+
+        if self._reward == 0:
+            return rew
+        elif self._reward == 1:
+            return max(0, rew)
+        elif self._reward == 2:
+            return rew if rew > 0 else -0.1
+        else:
+            raise NotImplementedError
 
     @property
     def state_as_tuple(self) -> NamedTuple[numbers.Real]:
@@ -344,6 +398,14 @@ class ShadedPVEnv(CustomEnv):
         self._log_path = path
 
     @property
+    def weather_df(self) -> pd.DataFrame:
+        return self.weather_dfs[self._day_idx]
+
+    @property
+    def available_weather_days(self) -> int:
+        return len(self.weather_dfs)
+
+    @property
     def _current_g(self) -> Sequence[numbers.Number]:
         """Values of irradiance for the taken step"""
         val = self.weather_df.iloc[self._row_idx][self._key_cols["irradiance"]].values
@@ -370,6 +432,14 @@ class ShadedPVEnv(CustomEnv):
         """
         return tuple(self._weather_comb.keys())
 
+    @property
+    def config_dic(self) -> Dict[str, str]:
+        return {
+            "states": self._name_states,
+            "dic_normalizer": self._norm_dic,
+            "reward": self._reward,
+        }
+
     @classmethod
     def get_default_env(cls) -> ShadedPVEnv:
         """Get a default env"""
@@ -383,18 +453,24 @@ class ShadedPVEnv(CustomEnv):
             dic_normalizer=DEFAULT_NORM_DIC,
             log_path=DEFAULT_LOG_PATH,
             plot_states=DEFAULT_PLOT_STATES,
+            reward=DEFAULT_REWARD,
         )
 
     @classmethod
     def get_envs(
         cls,
-        num_envs,
+        num_envs: Optional[int] = None,
         log_path: Optional[Path] = None,
         env_names: Optional[Sequence[str]] = None,
+        weather_paths: Optional[Sequence[str]] = None,
+        **kwargs,
     ) -> Union[ShadedPVEnv, Sequence[ShadedPVEnv]]:
         """Get a sequence of ShadedPVEnvs, each one logged to a different folder"""
+        if weather_paths is not None and env_names is not None:
+            assert len(weather_paths) == len(env_names)
+            num_envs = len(weather_paths)
+
         pvarray = ShadedArray.get_default_array()
-        weather_df = utils.csv_to_dataframe(DEFAULT_WEATHER_PATH)
         now_ = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
         path = log_path or DEFAULT_LOG_PATH
@@ -407,17 +483,43 @@ class ShadedPVEnv(CustomEnv):
                 path.joinpath(f"{now_}_env{str(i).zfill(3)}") for i in range(num_envs)
             ]
 
+        dic = {
+            "pvarray": pvarray,
+            "states": DEFAULT_STATES,
+            "log_states": DEFAULT_LOG_STATES,
+            "dic_normalizer": DEFAULT_NORM_DIC,
+            "plot_states": DEFAULT_PLOT_STATES,
+            "reward": DEFAULT_REWARD,
+        }
+        if kwargs is not None:
+            dic.update(kwargs)
+
+        # Add Weather dataframes
+        if weather_paths is None:
+            if num_envs == 1:
+                weather_paths = ["test"]
+            elif num_envs == 2:
+                weather_paths = ["train", "test"]
+            else:
+                raise NotImplementedError(
+                    "Must provide the paths for the weather dataframes"
+                )
+        # Dic lookup
+        weather_dic_path = {
+            "test": Path("data/synthetic_weather_test.csv"),
+            "test_uniform": Path("data/synthetic_weather_test_uniform.csv"),
+            "train": Path("data/synthetic_weather_train.csv"),
+            "train_1_4_0.5": Path("data/synthetic_weather_train_1_4_0.5.csv"),
+            "test_1_4_0.5": Path("data/synthetic_weather_test_1_4_0.5.csv"),
+            "train_0_4_0.5": Path("data/synthetic_weather_train_0_4_0.5.csv"),
+            "test_0_4_0.5": Path("data/synthetic_weather_test_0_4_0.5.csv"),
+        }
+        df_paths = [weather_dic_path[p] for p in weather_paths]
+        weather_dfs = [utils.csv_to_dataframe(df_path) for df_path in df_paths]
+
         envs = [
-            cls(
-                pvarray=pvarray,
-                weather_df=weather_df,
-                states=DEFAULT_STATES,
-                log_states=DEFAULT_LOG_STATES,
-                dic_normalizer=DEFAULT_NORM_DIC,
-                log_path=path,
-                plot_states=DEFAULT_PLOT_STATES,
-            )
-            for path in paths
+            cls(weather_df=df, log_path=path, **dic)
+            for df, path in zip(weather_dfs, paths)
         ]
 
         if len(envs) == 1:

@@ -20,9 +20,16 @@ class MATLABHandler:
         return self.engine.eval(instr, nargout=nargout)
 
     def eval_args(
-        self, func: str, arg: str, nargout: int = 0, include_semicolon: bool = True
+        self,
+        func: str,
+        arg: str,
+        nargout: int = 0,
+        include_semicolon: bool = True,
+        show: bool = False,
     ) -> Any:
         string = self.__class__.make_eval_string(func, arg, include_semicolon)
+        if show:
+            print(string)
         return self.eval(string, nargout=nargout)
 
     @staticmethod
