@@ -112,7 +112,7 @@ class DummyEnv(CustomEnv):
     def _reset(self) -> np.ndarray:
         """Reset the environment"""
         self.cur_step = 0
-        return np.array([self.step])
+        return np.array([self.cur_step])
 
     def _step(
         self, action: np.ndarray
@@ -347,7 +347,7 @@ class ShadedPVEnv(CustomEnv):
         elif self._reward == 1:
             return max(0, rew)
         elif self._reward == 2:
-            return rew if rew > 0 else -0.1
+            return rew if rew > 0 else -1
         else:
             raise NotImplementedError
 
