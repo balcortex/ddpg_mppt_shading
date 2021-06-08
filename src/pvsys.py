@@ -50,6 +50,13 @@ class MPP(NamedTuple):
     power: numbers.Real
     duty_cycle: numbers.Real
 
+    def __str__(self):
+        return ",".join(map(str, self))
+
+    @classmethod
+    def from_string(cls, string: str) -> MPP:
+        return cls(*map(float, string.split(",")))
+
 
 class ShadedIVCurve(NamedTuple):
     current: Tuple[numbers.Real]
@@ -98,6 +105,7 @@ class ShadedArray:
         self._vars = ("I_PV", "V_PV", "V_MOD1", "V_MOD2", "V_MOD3", "V_MOD4", "duty")
         # Variables to compose the key
         self._keys = ("irradiance", "ambient_temperature", "diode_state", "duty_cycle")
+        self._keys_mpp = ("irradiance", "ambient_temperature", "diode_state")
 
         # Initialize MATLAB
         self.mh.eval_args("cd", f"'{str(matlab_source_path)}'")
@@ -106,12 +114,16 @@ class ShadedArray:
         self.sim_params = dict()
         self.set_params(sim_params)
 
-        # self._last_cap_voltage = 0.0
-
         self.cache_path = matlab_source_path.joinpath(simulink_model_name + ".txt")
+        self.cache_mpp_path = matlab_source_path.joinpath(
+            simulink_model_name + f"_mpp_{self.decimals}.txt"
+        )
         if not self.cache_path.exists():
             self.cache_path.touch()
+        if not self.cache_mpp_path.exists():
+            self.cache_mpp_path.touch()
         self.cache = utils.read_dic_txt(self.cache_path)
+        self.cache_mpp = utils.read_dic_txt(self.cache_mpp_path)
 
     def set_params(self, params: Optional[Dict[str, Any]] = None) -> None:
         """
@@ -227,6 +239,7 @@ class ShadedArray:
 
         """
         utils.save_dic_txt(self.cache, self.cache_path, overwrite=overwrite)
+        utils.save_dic_txt(self.cache_mpp, self.cache_mpp_path, overwrite=overwrite)
 
     def get_shaded_iv_curve(
         self,
@@ -262,16 +275,24 @@ class ShadedArray:
         # Update the parameters if given
         self.simulate(duty_cycle, irradiance, ambient_temperature)
 
+        if self.is_cached_mpp:
+            return MPP.from_string(self.cache_mpp[self.key_mpp])
+
         curves = self.get_shaded_iv_curve(curve_points, verbose=verbose)
         power = self.power(curves.current, curves.voltage)
         idx = np.argmax(power)
 
-        return MPP(
+        mpp = MPP(
             current=curves.current[idx],
             voltage=curves.voltage[idx],
             power=power[idx],
             duty_cycle=curves.duty_cycle[idx],
         )
+
+        self._add_to_cache_mpp(mpp)
+        self.save_cache_dic()
+
+        return mpp
 
     def quit(self) -> None:
         self.mh.quit()
@@ -290,6 +311,11 @@ class ShadedArray:
         return self.key in self.cache.keys()
 
     @property
+    def is_cached_mpp(self) -> bool:
+        """Return `True` if the simulation for the mpp has been computed before"""
+        return self.key_mpp in self.cache_mpp.keys()
+
+    @property
     def sim_status(self) -> str:
         """Return the status of the Simulink simulation"""
         return self.mh.eval_args(
@@ -301,6 +327,13 @@ class ShadedArray:
         """Compose a key for dictionary storing"""
         return ",".join(
             str(val) for (key, val) in self.sim_params.items() if key in self._keys
+        )
+
+    @property
+    def key_mpp(self) -> str:
+        """Compose a key for dictionary storing"""
+        return ",".join(
+            str(val) for (key, val) in self.sim_params.items() if key in self._keys_mpp
         )
 
     @property
@@ -407,6 +440,10 @@ class ShadedArray:
     def _add_to_cache(self, output: SimulinkModelOutput) -> None:
         """Add the simulation result to the cache dictionary"""
         self.cache[self.key] = str(output)
+
+    def _add_to_cache_mpp(self, output: MPP) -> None:
+        """Add the simulation result to the cache MPP dictionary"""
+        self.cache_mpp[self.key_mpp] = str(output)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 import numbers
-import collections
-from typing import List, NamedTuple, Sequence, Deque, Dict, Tuple
+from collections import deque
+from typing import List, NamedTuple, Optional, Sequence, Deque, Dict, Tuple
 import gym
 
 import numpy as np
@@ -139,38 +139,51 @@ class ReplayBuffer:
     Numpy arrays
     """
 
-    def __init__(self, capacity: int, name: str = ""):
+    def __init__(self, capacity: int, **kwargs):
         assert isinstance(capacity, int)
-        self.name = name
-        self.buffer: Deque[Experience] = collections.deque(maxlen=capacity)
+        self.capacity = capacity
 
-        self._cum_rew = 0
+        self._obs_deq = deque(maxlen=capacity)
+        self._act_deq = deque(maxlen=capacity)
+        self._rew_deq = deque(maxlen=capacity)
+        self._done_deq = deque(maxlen=capacity)
+        self._next_obs_deq = deque(maxlen=capacity)
+
+        self._cum_rew = 0.0
         self._n = 0
-        self._min_rew = 0
-        self._max_rew = 0
+        self._min_rew = 0.0
+        self._max_rew = 0.0
 
     def __len__(self) -> int:
-        return len(self.buffer)
+        return len(self._obs_deq)
 
     def __repr__(self) -> str:
-        return f"ReplayBuffer {self.buffer.maxlen}"
+        return f"{self.__class__.__name__}"
 
-    def append(self, experience) -> None:
+    def append(self, experience: Experience) -> None:
         self._cum_rew += experience.reward
         self._n += 1
         self._max_rew = max(self._max_rew, experience.reward)
         self._min_rew = min(self._min_rew, experience.reward)
 
-        self.buffer.append(experience)
+        self._obs_deq.append(experience.obs)
+        self._act_deq.append(experience.action)
+        self._rew_deq.append(experience.reward)
+        self._done_deq.append(experience.done)
+        self._next_obs_deq.append(experience.next_obs)
 
     def sample(self, batch_size: int) -> ExperienceBatch:
         assert (
-            len(self.buffer) >= batch_size
-        ), f"Cannot sample {batch_size} elements from buffer of length {len(self.buffer)}"
-        indices = np.random.choice(len(self.buffer), batch_size, replace=False)
-        obs, actions, rewards, dones, next_obs = zip(
-            *[self.buffer[idx] for idx in indices]
-        )
+            len(self) >= batch_size
+        ), f"Cannot sample {batch_size} elements from buffer of length {len(self)}"
+
+        self._indices = self._get_indices(batch_size)
+
+        obs = [self._obs_deq[idx] for idx in self._indices]
+        actions = [self._act_deq[idx] for idx in self._indices]
+        rewards = [self._rew_deq[idx] for idx in self._indices]
+        dones = [self._done_deq[idx] for idx in self._indices]
+        next_obs = [self._next_obs_deq[idx] for idx in self._indices]
 
         return ExperienceBatch(
             np.array(obs),
@@ -180,17 +193,15 @@ class ReplayBuffer:
             np.array(next_obs),
         )
 
+    def _get_indices(self, batch_size: int) -> np.ndarray:
+        return np.random.choice(len(self), batch_size, replace=False)
+
     def reward_mean_std(self) -> Tuple[float, float]:
-        _, _, rew, *_ = zip(*self.buffer)
-        return np.mean(rew), np.std(rew)
+        rew_ = np.array(self._rew_deq)
+        return rew_.mean(), rew_.std()
 
     @property
-    def config_dic(self) -> Dict[str, str]:
-        ignore = ["buffer", "name"]
-        return {k: str(v) for k, v in self.__dict__.items() if k not in ignore}
-
-    @property
-    def mean_rew(self) -> float:
+    def total_mean_rew(self) -> float:
         return self._cum_rew / self._n
 
     @property
@@ -201,123 +212,84 @@ class ReplayBuffer:
     def max_rew(self) -> float:
         return self._max_rew
 
+    @property
+    def config_dic(self) -> Dict[str, str]:
+        return {k: str(v) for k, v in self.__dict__.items() if not k.startswith("_")}
 
-class PrioritizedReplayBuffer(object):
+
+class PrioritizedReplayBuffer(ReplayBuffer):
     def __init__(
-        self, capacity: int, alpha: float = 0.6, beta: float = 0.4, sort: bool = True
+        self,
+        capacity: int,
+        alpha: float = 0.6,
+        beta: float = 0.4,
+        tau: float = 1.0,
+        sort: bool = False,
     ):
+        super().__init__(capacity)
+
         self.alpha = alpha
         self.beta = beta
+        self.tau = tau
         self.sort = sort
-        self.capacity = capacity
-        self.buffer = []
-        self.pos = 0
-        self.priorities = np.zeros((capacity,), dtype=np.float32)
+        self._prios_deq = deque(maxlen=capacity)
 
-        self._cum_rew = 0
-        self._n = 0
-        self._min_rew = 0
-        self._max_rew = 0
+    def append(self, experience: Experience) -> None:
+        super().append(experience)
 
-    def __len__(self):
-        return len(self.buffer)
-
-    def __repr__(self) -> str:
-        return f"PrioritizedReplayBuffer {self.capacity}"
-
-    def append(self, experience) -> None:
-        self._cum_rew += experience.reward
-        self._n += 1
-        self._max_rew = max(self._max_rew, experience.reward)
-        self._min_rew = min(self._min_rew, experience.reward)
-
-        max_prio = self.priorities.max() if self.buffer else 1.0
-        self.priorities[self.pos] = max_prio
-
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(experience)
-        else:
-            self.buffer[self.pos] = experience
-
-        self.pos = (self.pos + 1) % self.capacity
+        max_prio = max(self._prios_deq) if self._prios_deq else 1.0
+        self._prios_deq.append(max_prio)
 
         if self.sort:
-            ind = np.argsort(self.priorities)[::-1]
-            self.priorities = self.priorities[ind]
+            self._sort_by_priority()
 
-            buf = []
-            for i, _ in zip(ind, self.buffer):
-                buf.append(self.buffer[i])
-            self.buffer = buf
+    def _sort_by_priority(self) -> None:
+        idx = np.argsort(self._prios_deq)
 
-            # self.priorities = self.priorities[::-1]
-            # self.buffer = self.buffer[::-1]
+        obs = deque([self._obs_deq[i] for i in idx], maxlen=self.capacity)
+        act = deque([self._act_deq[i] for i in idx], maxlen=self.capacity)
+        rew = deque([self._rew_deq[i] for i in idx], maxlen=self.capacity)
+        done = deque([self._done_deq[i] for i in idx], maxlen=self.capacity)
+        next_obs = deque([self._next_obs_deq[i] for i in idx], maxlen=self.capacity)
+        prios = deque([self._prios_deq[i] for i in idx], maxlen=self.capacity)
+
+        self._obs_deq = obs
+        self._act_deq = act
+        self._rew_deq = rew
+        self._done_deq = done
+        self._next_obs_deq = next_obs
+        self._prios_deq = prios
 
     def sample(self, batch_size: int) -> PrioritizedExperienceBatch:
-        assert (
-            len(self.buffer) >= batch_size
-        ), f"Cannot sample {batch_size} elements from buffer of length {len(self.buffer)}"
+        exp_batch = super().sample(batch_size)
 
-        if len(self.buffer) == self.capacity:
-            prios = self.priorities
-        else:
-            prios = self.priorities[: self.pos]
+        weights = (len(self) * self._probs[self._indices]) ** (-self.beta)
+        weights /= weights.max()
 
+        return PrioritizedExperienceBatch(
+            *exp_batch,
+            np.array(weights, dtype=np.float32),
+            np.array(self._indices, dtype=np.int32),
+        )
+
+    def _get_indices(self, batch_size: int) -> np.ndarray:
+        prios = np.array(self._prios_deq)
         probs = prios ** self.alpha
         probs /= probs.sum()
 
-        indices = np.random.choice(len(self.buffer), batch_size, p=probs, replace=False)
+        self._probs = probs
 
-        # print(indices)
-
-        weights = (len(self.buffer) * probs[indices]) ** (-self.beta)
-        weights /= weights.max()
-
-        obs, actions, rewards, dones, next_obs = zip(
-            *[self.buffer[idx] for idx in indices]
-        )
-
-        return PrioritizedExperienceBatch(
-            np.array(obs),
-            np.array(actions),
-            np.array(rewards, dtype=np.float32),
-            np.array(dones, dtype=np.uint8),
-            np.array(next_obs),
-            np.array(weights, dtype=np.float32),
-            np.array(indices, dtype=np.int32),
-        )
+        return np.random.choice(len(self), batch_size, replace=False, p=probs)
 
     def update_priorities(
         self,
-        batch_indices: Sequence[int],
-        batch_priorities: Sequence[numbers.Real],
-        tau: float = 0.1,
+        batch_indices: np.ndarray,
+        batch_priorities: np.ndarray,
     ):
         for idx, prio in zip(batch_indices, batch_priorities):
-            old_prio = self.priorities[idx]
-            new_prio = (1 - tau) * old_prio + tau * prio
-            self.priorities[idx] = new_prio
-
-    def reward_mean_std(self) -> Tuple[float, float]:
-        _, _, rew, *_ = zip(*self.buffer)
-        return np.mean(rew), np.std(rew)
-
-    @property
-    def config_dic(self) -> Dict[str, str]:
-        ignore = ["buffer", "pos", "priorities"]
-        return {k: str(v) for k, v in self.__dict__.items() if k not in ignore}
-
-    @property
-    def mean_rew(self) -> float:
-        return self._cum_rew / self._n
-
-    @property
-    def min_rew(self) -> float:
-        return self._min_rew
-
-    @property
-    def max_rew(self) -> float:
-        return self._max_rew
+            old_prio = self._prios_deq[idx]
+            new_prio = (1 - self.tau) * old_prio + self.tau * float(prio)
+            self._prios_deq[idx] = new_prio
 
 
 if __name__ == "__main__":

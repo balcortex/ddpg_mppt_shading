@@ -295,8 +295,8 @@ class DDPG(Model):
             batch = self._prepare_batch()
 
             # We do this since each weight will squared in MSE loss
-            # weights = np.sqrt(batch.weights)
-            weights = batch.weights
+            weights = np.sqrt(batch.weights)
+            # weights = batch.weights
 
             # Critic training
             q_target = self.critic_target(
@@ -330,7 +330,7 @@ class DDPG(Model):
             # Update priorities of experiences with TD errors
             if self.use_per:
                 error_np = weighted_td_error.detach().cpu().numpy()
-                new_priorities = np.abs(error_np) + 1e-6
+                new_priorities = np.abs(error_np)  # + 1e-6
                 self.buffer.update_priorities(batch.indices, new_priorities)
 
             # Keep track of losses
@@ -350,19 +350,19 @@ class DDPG(Model):
         done = th.tensor(batch.done, dtype=th.bool)
         next_obs = th.tensor(batch.next_obs, dtype=th.float32)
 
-        if self.norm_rewards:
-            # reward = reward + self.buffer.min_rew
-
-            reward = reward - self.buffer.mean_rew
-
-            # reward = (reward - self.buffer.min_rew) / (
-            #     self.buffer.max_rew - self.buffer.min_rew
-            # )
-
-            # mean, std = self.buffer.reward_mean_std()
-            # reward = (reward - mean) / (std + 1e-6)
-
-            # reward = (reward - reward.mean()) / (reward.std() + 1e-6)
+        if self.norm_rewards == 1:
+            reward = reward - self.buffer.total_mean_rew
+        elif self.norm_rewards == 2:
+            mean, std = self.buffer.reward_mean_std()
+            reward = (reward - mean) / (std + 1e-6)
+        elif self.norm_rewards == 3:
+            reward = (reward - reward.mean()) / (reward.std() + 1e-6)
+        elif self.norm_rewards == 4:
+            reward = (reward - self.buffer.min_rew) / (
+                self.buffer.max_rew - self.buffer.min_rew
+            )
+        else:
+            pass
 
         if self.use_per:
             weights = th.tensor(batch.weights, dtype=th.float32)
@@ -438,26 +438,26 @@ class DDPG(Model):
 class TD3(DDPG):
     def __init__(
         self,
-        env_kwargs: Optional[Dict[Any, Any]],
-        policy_kwargs: Optional[Dict[Any, Any]],
-        buffer_kwargs: Optional[Dict[Any, Any]],
-        test_policy_kwargs: Optional[Dict[Any, Any]],
-        batch_size: int,
-        actor_lr: float,
-        critic_lr: float,
-        actor_l2: float,
-        critic_l2: float,
-        tau_critic: float,
-        tau_actor: float,
-        gamma: float,
-        n_steps: int,
-        norm_rewards: bool,
-        train_steps: int,
-        collect_steps: int,
+        env_kwargs: Optional[Dict[Any, Any]] = None,
+        policy_kwargs: Optional[Dict[Any, Any]] = None,
+        buffer_kwargs: Optional[Dict[Any, Any]] = None,
+        test_policy_kwargs: Optional[Dict[Any, Any]] = None,
+        batch_size: int = 64,
+        actor_lr: float = 1e-4,
+        critic_lr: float = 1e-3,
+        actor_l2: float = 0.0,
+        critic_l2: float = 0.0,
+        tau_critic: float = 1e-3,
+        tau_actor: float = 1e-3,
+        gamma: float = 0.99,
+        n_steps: int = 1,
+        norm_rewards: bool = False,
+        train_steps: int = 1,
+        collect_steps: int = 1,
         prefill_buffer: Optional[int] = None,
         use_per: bool = False,
         policy_delay: int = 2,
-        target_action_epsilon_noise: float = 0.00,
+        target_action_epsilon_noise: float = 0.0,
     ):
         super().__init__(
             env_kwargs=env_kwargs,
@@ -503,7 +503,8 @@ class TD3(DDPG):
             # Add noise to the actions
             act_target = self.actor_target(batch.next_obs)
             noise = th.rand_like(act_target) * 2 - 1  # Normal noise between [-1, 1]
-            act_target += noise * self.target_epsilon_noise
+            noise *= self.target_epsilon_noise
+            act_target += noise
             act_target = act_target.clamp(-1, 1)
 
             # Critics training
@@ -541,39 +542,23 @@ class TD3(DDPG):
             critic_loss_2.backward()
             self.critic2_optim.step()
 
-            self.critic_target.alpha_sync(self.tau_critic)
-            self.critic2_target.alpha_sync(self.tau_critic)
-
             # Actor trainig
             if self.step_counter % self.policy_delay == 0 or self.step_counter == 1:
-                actor_loss_1 = -self.critic(batch.obs, self.actor(batch.obs))
-                actor_loss_2 = -self.critic2(batch.obs, self.actor(batch.obs))
-                actor_loss = th.min(actor_loss_1, actor_loss_2).mean()
-                # actor_loss = th.max(actor_loss_1, actor_loss_2).mean()
-                # actor_loss = -self.critic(batch.obs, self.actor(batch.obs)).mean()
+                actor_loss = -self.critic(batch.obs, self.actor(batch.obs)).mean()
                 self.actor_optim.zero_grad()
                 actor_loss.backward()
                 self.actor_optim.step()
 
                 self.actor_target.alpha_sync(self.tau_actor)
+                self.critic_target.alpha_sync(self.tau_critic)
+                self.critic2_target.alpha_sync(self.tau_critic)
             else:
                 actor_loss = th.tensor(self.actor_loss[-1])
 
             # For prioritized exprience replay
             # Update priorities of experiences with TD errors
             if self.use_per:
-                # error_np = (
-                #     th.max(weighted_td_error_1, weighted_td_error_2)
-                #     .detach()
-                #     .cpu()
-                #     .numpy()
-                # )
-                error_np = (
-                    (weighted_td_error_1 * 0.5 + weighted_td_error_2 * 0.5)
-                    .detach()
-                    .cpu()
-                    .numpy()
-                )
+                error_np = weighted_td_error_1.detach().cpu().numpy()
                 new_priorities = np.abs(error_np) + 1e-6
                 self.buffer.update_priorities(batch.indices, new_priorities)
 
@@ -716,25 +701,27 @@ if __name__ == "__main__":
 
     # Grid run of DDPG
     dic = {
-        "batch_size": 64,
-        "actor_lr": 1e-4,
+        "batch_size": 64,  # 64
+        "actor_lr": 1e-4,  # 1e-3
         "critic_lr": 1e-3,
-        "tau_critic": 1e-3,
-        "tau_actor": 1e-4,
+        "tau_critic": 1e-3,  # 1e-3
+        "tau_actor": 1e-3,  # 1e-4
         "actor_l2": 0,
         "critic_l2": 0,
-        "gamma": 0.5,  # 0.9
+        "gamma": 0.1,  # 0.6
+        # "gamma": 0.6,  # 0.6
         "n_steps": 1,
-        "norm_rewards": True,
+        "norm_rewards": 1,
+        # "norm_rewards": 3,
         "train_steps": 1,  # 5
         "collect_steps": 1,
-        "prefill_buffer": 200,
+        # "prefill_buffer": 200,
         "use_per": True,  # True,
-        # "policy_delay": 3,  # [1, 3, 5, 10],
-        # "target_action_epsilon_noise": 0.0,
+        "policy_delay": 2,
+        "target_action_epsilon_noise": 0.001,
         "policy_kwargs": {
             "noise": [GaussianNoise(mean=0.0, std=0.3)],
-            "schedule": [LinearSchedule(max_steps=3_000)],
+            "schedule": [LinearSchedule(max_steps=10_000)],
             "decrease_noise": True,
         },
         # "test_policy_kwargs": {
@@ -742,39 +729,30 @@ if __name__ == "__main__":
         #     "schedule": ConstantSchedule(1.0),
         # },
         "buffer_kwargs": {
-            "capacity": 100_000,
-            # "alpha": 0.6,  # 0.6
-            # "beta": 0.0,  # 0.4
-            # "sort": False,  # False
+            "capacity": 50_000,
+            # "alpha": 0.9,  # 0.9
+            # "beta": 0.2,  # 0.2
+            # "tau": 1.0,  # 0.9
+            # "sort": True,  # False
         },
         "env_kwargs": {
-            "reward": [2],
-            "states": [
-                # ["norm_voltage", "norm_power", "norm_delta_power"],
-                [
-                    "norm_voltage",
-                    "delta_norm_voltage",
-                    "duty_cycle",
-                    "delta_duty_cycle",
-                    "norm_power",
-                    "norm_delta_power",
-                ],
-            ],
+            "reward": [0],
+            "states": [["duty_cycle", "delta_duty_cycle", "norm_power"]],
             # "weather_paths": [["test", "test"]],
-            "weather_paths": [["test_1_4_0.5", "test_1_4_0.5"]],
-            # "weather_paths": [["test_0_4_0.5", "test_0_4_0.5"]],
+            "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
+            # "weather_paths": [["train_0_4_0.5", "test_0_4_0.5"]],
             # "weather_paths": [["test_uniform", "test_uniform"]],
         },
     }
-    models = DDPG.from_grid(
-        dic,
-        repeat_run=20,
-        epochs=1000,
-        training_iter=100,
-    )
-    # models = TD3.from_grid(
+    # models = DDPG.from_grid(
     #     dic,
     #     repeat_run=1,
     #     epochs=1000,
-    #     training_iter=20,
+    #     training_iter=30,
     # )
+    models = TD3.from_grid(
+        dic,
+        repeat_run=1,
+        epochs=1000,
+        training_iter=20,
+    )
