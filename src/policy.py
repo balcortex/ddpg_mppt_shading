@@ -14,7 +14,19 @@ from src.schedule import Schedule
 
 
 class Policy(ABC):
-    """Policy base class"""
+    """
+    Policy base class
+    Transform observations into actions
+
+    Parameters:
+        - action_space: the action space of the environment
+        - noise: class that adds noise to the selected actions
+        - schedule: class that keeps track of the steps taken in the environment
+            and returns a float to decide whether to add noise or not (comparing it to
+            a uniform random float)
+        - decrese_noise: whether to decrease the noise based on the value of the schudule
+            or keeping it constant.
+    """
 
     def __init__(
         self,
@@ -99,20 +111,16 @@ class Policy(ABC):
 
     @property
     def config_dic(self) -> Dict[str, str]:
+        """"Return the parameters of the class as a dictionary"""
         return {k: str(v) for k, v in self.__dict__.items()}
-
-    def as_deterministic(self) -> Policy:
-        copy_ = deepcopy(self)
-        copy_.noise = None
-        return copy_
 
 
 class RandomPolicy(Policy):
     """
-    Policy that returns a random action depending on the environment
+    Policy that returns a random action depending on the action space
 
     Parameters:
-        env: gym environment
+        action_space: the action space of the environment
     """
 
     def __init__(self, action_space: spaces.Box):
@@ -127,8 +135,8 @@ class RandomPolicy(Policy):
         Get an action according to the observation
 
         Paramters:
-            obs: observations from the environment
-            info: additional info passed to the policy (not used)
+            obs: not used
+            info: not used
         """
         return self.action_space.sample()
 
@@ -139,6 +147,20 @@ class RandomPolicy(Policy):
 class PerturbObservePolicy(Policy):
     """
     Perturb & Observe algorithm
+
+    Parameters:
+        - action_space: the action space of the environment
+        - dc_step: the size perturbation on the duty cycle
+        - dv_key: the key of the `delta_voltage` variable pased on the `info` parameter in
+            the `call` method
+        - dp_key: the key of the `delta_power` variable pased on the `info` parameter in
+            the `call` method
+        - noise: class that adds noise to the selected actions
+        - schedule: class that keeps track of the steps taken in the environment
+            and returns a float to decide whether to add noise or not (comparing it to
+            a uniform random float)
+        - decrese_noise: whether to decrease the noise based on the value of the schudule
+            or keeping it constant.
     """
 
     def __init__(
@@ -167,8 +189,8 @@ class PerturbObservePolicy(Policy):
         Get an action according to the observation
 
         Parameters:
-            obs: observations from the environment
-            info: additional info passed to the policy
+            obs: not used
+            info: dictionary containing the `dv_key` and `dp_key` variables
         """
         delta_p = info.get(self.dp_key, 0.0)
         delta_v = info.get(self.dv_key, 0.0)
@@ -194,7 +216,22 @@ class PerturbObservePolicy(Policy):
 
 
 class MLPPolicy(Policy):
-    """Multilayer Perceptron Policy"""
+    """
+    Multilayer Perceptron policy.
+    Transform observation into actions
+
+    Parameters:
+        - action_space: the action space of the environment
+        - net: the network that maps the observations to actions. The network outputs must
+            be between [0, 1] (tanh activation).
+        - noise: class that adds noise to the selected actions
+        - schedule: class that keeps track of the steps taken in the environment
+            and returns a float to decide whether to add noise or not (comparing it to
+            a uniform random float)
+        - decrese_noise: whether to decrease the noise based on the value of the schudule
+            or keeping it constant.
+        - device: the device on which the net runs (`cpu` or `cuda`)
+    """
 
     def __init__(
         self,
@@ -216,6 +253,13 @@ class MLPPolicy(Policy):
 
     @th.no_grad()
     def __call__(self, obs: np.ndarray, info: Optional[Dict[str, Any]]) -> np.ndarray:
+        """
+        Get an action according to the observation
+
+        Parameters:
+            obs: observations from the environment
+            info: not used
+        """
         obs_v = th.tensor(obs, dtype=th.float32)
         actions = self.net(obs_v)
         actions = self.process_actions(actions)
