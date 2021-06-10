@@ -1,12 +1,11 @@
 import numbers
 from collections import deque
-from typing import List, NamedTuple, Optional, Sequence, Deque, Dict, Tuple
+from typing import List, NamedTuple, Sequence, Dict, Tuple
 import gym
 
 import numpy as np
 import torch as th
 
-from src.env import ShadedPVEnv
 from src.policy import Policy
 
 Tensor = th.Tensor
@@ -57,6 +56,17 @@ class PrioritizedExperienceTensorBatch(NamedTuple):
 
 
 class ExperienceSource:
+    """
+    Class that automates the interaction with the environment, making the reset calls transparent when the episode is finished.
+    The methods return trajectories,
+
+    Parameters:
+        - policy: the policy that decides the actions taken
+        - env: the environment on which the policy performs
+        - gamma: the discount factor (when n_steps > 1)
+        - n_steps: perform the number of steps in the environment and discount the reward
+    """
+
     def __init__(
         self, policy: Policy, env: gym.Env, gamma: float = 1.0, n_steps: int = 1
     ):
@@ -67,11 +77,13 @@ class ExperienceSource:
         self.reset()
 
     def reset(self) -> None:
+        """Reset the experience source"""
         self.obs = self.env.reset()
         self.done = False
         self.info = {}
 
     def play_step(self) -> Experience:
+        """Play one step in the environent and return the trajectory"""
         if self.done:
             self.reset()
 
@@ -87,18 +99,21 @@ class ExperienceSource:
         return Experience(obs, action, reward, done, self.obs)
 
     def play_episode(self) -> Sequence[Experience]:
+        """
+        Play one step in the environment until the end of the episode and return the complete trajectory
+        """
         ep_history = []
 
         while True:
             experience = self.play_step()
             ep_history.append(experience)
 
-            # if experience.next_obs is experience.obs:
             if self.done:
                 self.reset()
                 return ep_history
 
     def play_n_steps(self) -> Experience:
+        """Play `n_steps` in the environment and return the condensed trajectory"""
         history: List[Experience] = []
         discounted_reward = 0.0
 
@@ -118,12 +133,9 @@ class ExperienceSource:
             next_obs=history[-1].next_obs,
         )
 
-    # @property
-    # def env(self) -> ShadedPVEnv:
-    #     return self.policy.env
-
     @property
     def config_dic(self) -> Dict[str, str]:
+        """"Return the parameters of the class as a dictionary"""
         ignore = ["obs", "done", "info", "env"]
         return {k: str(v) for k, v in self.__dict__.items() if k not in ignore}
 
@@ -161,6 +173,7 @@ class ReplayBuffer:
         return f"{self.__class__.__name__}"
 
     def append(self, experience: Experience) -> None:
+        """Add a experience to the buffer"""
         self._cum_rew += experience.reward
         self._n += 1
         self._max_rew = max(self._max_rew, experience.reward)
@@ -173,6 +186,7 @@ class ReplayBuffer:
         self._next_obs_deq.append(experience.next_obs)
 
     def sample(self, batch_size: int) -> ExperienceBatch:
+        """Sample a random batch of experiences from the buffer"""
         assert (
             len(self) >= batch_size
         ), f"Cannot sample {batch_size} elements from buffer of length {len(self)}"
@@ -194,30 +208,52 @@ class ReplayBuffer:
         )
 
     def _get_indices(self, batch_size: int) -> np.ndarray:
+        """Perform uniform sampling"""
         return np.random.choice(len(self), batch_size, replace=False)
 
     def reward_mean_std(self) -> Tuple[float, float]:
+        """Return the mean and standard deviation of all rewards in the buffer"""
         rew_ = np.array(self._rew_deq)
         return rew_.mean(), rew_.std()
 
     @property
     def total_mean_rew(self) -> float:
+        """Return the total mean reward of all the rewards seen by the buffer"""
         return self._cum_rew / self._n
 
     @property
     def min_rew(self) -> float:
+        """Return the minumum reward seen by the buffer"""
         return self._min_rew
 
     @property
     def max_rew(self) -> float:
+        """Return the maximum reward seen by the buffer"""
         return self._max_rew
 
     @property
     def config_dic(self) -> Dict[str, str]:
+        """"Return the parameters of the class as a dictionary"""
         return {k: str(v) for k, v in self.__dict__.items() if not k.startswith("_")}
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
+    """
+    Buffer to save the interactions of the agent with the environment. The sampling is prioritized based on each element priority.
+
+    Parameters:
+        capacity: buffers' capacity to store a experience tuple
+        alpha: how much prioritization is made (0 -> uniform, 1 -> full prioritization)
+        beta: importance sampling (IS) correction for non uniform probabilities
+            (0 -> no correction, 1 -> full correction)
+        tau: soft update between old priorities and new priorities
+        sort: keep the greatest priorities (greatest error) on the right side of the buffer
+            (the left side is overwritten with new experiences)
+
+    Returns:
+    Numpy arrays
+    """
+
     def __init__(
         self,
         capacity: int,
@@ -244,6 +280,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             self._sort_by_priority()
 
     def _sort_by_priority(self) -> None:
+        """Keep the experiencies with the greatest priority on the right of the buffer"""
         idx = np.argsort(self._prios_deq)
 
         obs = deque([self._obs_deq[i] for i in idx], maxlen=self.capacity)
@@ -273,6 +310,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         )
 
     def _get_indices(self, batch_size: int) -> np.ndarray:
+        """"Perform prioritized sampling"""
         prios = np.array(self._prios_deq)
         probs = prios ** self.alpha
         probs /= probs.sum()
@@ -286,6 +324,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         batch_indices: np.ndarray,
         batch_priorities: np.ndarray,
     ):
+        """Update the priorities of the given indices"""
         for idx, prio in zip(batch_indices, batch_priorities):
             old_prio = self._prios_deq[idx]
             new_prio = (1 - self.tau) * old_prio + self.tau * float(prio)
