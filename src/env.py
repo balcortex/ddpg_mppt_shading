@@ -38,6 +38,10 @@ DEFAULT_LOG_STATES = (
     "norm_power",
     "norm_delta_power",
     "reward",
+    "mod1_voltage",
+    "mod2_voltage",
+    "mod3_voltage",
+    "mod4_voltage",
 )
 DEFAULT_PLOT_STATES = {
     # key -> filename, val -> plot from df

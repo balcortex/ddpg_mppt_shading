@@ -23,7 +23,7 @@ from src.experience import (
     ExperienceTensorBatch,
     PrioritizedExperienceTensorBatch,
 )
-from src.policy import Policy
+from src.policy import Policy, RandomPolicy
 from src import rl
 from src.noise import GaussianNoise
 from src.schedule import ConstantSchedule, LinearSchedule
@@ -195,6 +195,7 @@ class DDPG(Model):
         collect_steps: int = 1,
         prefill_buffer: Optional[int] = None,
         use_per: bool = False,
+        warmup: int = 0,
     ):
         """
         per: use the Prioritized Experience Buffer
@@ -206,7 +207,9 @@ class DDPG(Model):
         env_kwargs_.update(self._get_env_names())
         env, self.env_test = ShadedPVEnv.get_envs(**env_kwargs_)
 
-        self.actor, self.critic = rl.create_mlp_actor_critic(env=env)
+        self.actor, self.critic = rl.create_mlp_actor_critic(
+            env=env, weight_init_fn=None
+        )
 
         if test_policy_kwargs is None:
             test_policy_kwargs = {}
@@ -237,6 +240,7 @@ class DDPG(Model):
         self.norm_rewards = norm_rewards
         self.train_steps = train_steps
         self.collect_steps = collect_steps
+        self.warmup = warmup
 
         self.actor_optim = Adam(
             self.actor.parameters(), lr=actor_lr, weight_decay=actor_l2
@@ -262,22 +266,36 @@ class DDPG(Model):
             exp_source_kwargs=exp_source_kwargs,
         )
 
+        # Explore policy
+        random_policy = RandomPolicy(env.action_space)
+        self.warmup_exp_source = ExperienceSource(random_policy, env, gamma, n_steps)
+
         # After calling super the class members are not saved
 
         # Fill replay buffer
         fill_steps = prefill_buffer or batch_size
         for _ in tqdm(range(fill_steps), desc="Pre-filling replay buffer"):
-            self.buffer.append(self.collect_exp_source.play_n_steps())
+            # self.buffer.append(self.collect_exp_source.play_n_steps())
+            self.buffer.append(self.warmup_exp_source.play_n_steps())
 
         self.step_counter = 0
         self.actor_loss = []
         self.critic_loss = []
 
+        self._pre_warmup_init()
+
+        # Warm-up training
+        for i in tqdm(range(1, self.warmup + 1), desc="Warm-up training"):
+            self._train_net(train_steps=1)
+
+    def _pre_warmup_init(self) -> None:
+        pass
+
     def learn(
         self,
         epochs: int = 1000,
     ) -> None:
-        for i in tqdm(range(1, epochs + 1)):
+        for i in tqdm(range(1, epochs + 1), desc="Training"):
 
             self._train_net(self.train_steps)
             self._collect_steps(self.collect_steps)
@@ -392,7 +410,8 @@ class DDPG(Model):
         for dic in gg:
             for _ in range(repeat_run):
                 model = cls(**dic, **kwargs)
-                for _ in range(training_iter):
+                for i in range(training_iter):
+                    print(f"{i+1}/{training_iter}")
                     model.learn(epochs=epochs)
                     model.agent_test_source.play_episode()
                     model.save_plot_losses()
@@ -421,6 +440,9 @@ class DDPG(Model):
         ax.plot(range(self.step_counter), getattr(self, loss))
         ax.set_xlabel("Epoch")
         ax.set_ylabel(loss)
+
+        if "critic" in loss:
+            ax.set_yscale("log")
 
         return fig
 
@@ -456,9 +478,14 @@ class TD3(DDPG):
         collect_steps: int = 1,
         prefill_buffer: Optional[int] = None,
         use_per: bool = False,
+        warmup: int = 0,
         policy_delay: int = 2,
-        target_action_epsilon_noise: float = 0.0,
+        target_action_epsilon_noise: float = 0.001,
     ):
+
+        self.policy_delay = policy_delay
+        self.target_epsilon_noise = target_action_epsilon_noise
+
         super().__init__(
             env_kwargs=env_kwargs,
             policy_kwargs=policy_kwargs,
@@ -478,15 +505,18 @@ class TD3(DDPG):
             collect_steps=collect_steps,
             prefill_buffer=prefill_buffer,
             use_per=use_per,
+            warmup=warmup,
         )
 
-        self.policy_delay = policy_delay
-        self.target_epsilon_noise = target_action_epsilon_noise
-
+    def _pre_warmup_init(self) -> None:
         self.critic2_loss = []
-        self.critic2 = rl.create_mlp_critic(self.env)
+        self.critic2 = rl.create_mlp_critic(self.env, weight_init_fn=None)
+
+        params = self.critic_optim.param_groups[0]
         self.critic2_optim = Adam(
-            self.critic2.parameters(), lr=critic_lr, weight_decay=critic_l2
+            self.critic2.parameters(),
+            lr=params["lr"],
+            weight_decay=params["weight_decay"],
         )
 
         self.critic2_target = rl.TargetNet(self.critic2)
@@ -542,6 +572,9 @@ class TD3(DDPG):
             critic_loss_2.backward()
             self.critic2_optim.step()
 
+            self.critic_target.alpha_sync(self.tau_critic)
+            self.critic2_target.alpha_sync(self.tau_critic)
+
             # Actor trainig
             if self.step_counter % self.policy_delay == 0 or self.step_counter == 1:
                 actor_loss = -self.critic(batch.obs, self.actor(batch.obs)).mean()
@@ -550,8 +583,6 @@ class TD3(DDPG):
                 self.actor_optim.step()
 
                 self.actor_target.alpha_sync(self.tau_actor)
-                self.critic_target.alpha_sync(self.tau_critic)
-                self.critic2_target.alpha_sync(self.tau_critic)
             else:
                 actor_loss = th.tensor(self.actor_loss[-1])
 
@@ -622,8 +653,8 @@ class TD3(DDPG):
     #         critic_loss_2.backward()
     #         self.critic2_optim.step()
 
-    #         self.critic_target.alpha_sync(self.tau)
-    #         self.critic2_target.alpha_sync(self.tau)
+    #         self.critic_target.alpha_sync(self.tau_critic)
+    #         self.critic2_target.alpha_sync(self.tau_critic)
 
     #         # Actor trainig
     #         if self.step_counter % self.policy_delay == 0 or self.step_counter == 1:
@@ -638,7 +669,7 @@ class TD3(DDPG):
     #             actor_loss.backward()
     #             self.actor_optim.step()
 
-    #             self.actor_target.alpha_sync(self.tau)
+    #             self.actor_target.alpha_sync(self.tau_actor)
     #         else:
     #             actor_loss = th.tensor(self.actor_loss[-1])
 
@@ -704,21 +735,20 @@ if __name__ == "__main__":
         "batch_size": 64,  # 64
         "actor_lr": 1e-4,  # 1e-3
         "critic_lr": 1e-3,
-        "tau_critic": 1e-3,  # 1e-3
-        "tau_actor": 1e-3,  # 1e-4
+        "tau_critic": 1e-4,  # 1e-3
+        "tau_actor": 1e-4,  # 1e-4
         "actor_l2": 0,
         "critic_l2": 0,
-        "gamma": 0.1,  # 0.6
-        # "gamma": 0.6,  # 0.6
+        "gamma": 0.01,  # 0.6
         "n_steps": 1,
-        "norm_rewards": 1,
-        # "norm_rewards": 3,
+        "norm_rewards": [0, 1, 2, 3, 4],
         "train_steps": 1,  # 5
         "collect_steps": 1,
-        # "prefill_buffer": 200,
+        "prefill_buffer": 100,
         "use_per": True,  # True,
-        "policy_delay": 2,
-        "target_action_epsilon_noise": 0.001,
+        # "policy_delay": 2,
+        # "target_action_epsilon_noise": 0.001,
+        "warmup": 1000,
         "policy_kwargs": {
             "noise": [GaussianNoise(mean=0.0, std=0.3)],
             "schedule": [LinearSchedule(max_steps=10_000)],
@@ -737,7 +767,17 @@ if __name__ == "__main__":
         },
         "env_kwargs": {
             "reward": [0],
-            "states": [["duty_cycle", "delta_duty_cycle", "norm_power"]],
+            "states": [
+                [
+                    "mod1_voltage",
+                    "mod2_voltage",
+                    "mod3_voltage",
+                    "mod4_voltage",
+                    "duty_cycle",
+                    "delta_duty_cycle",
+                    "norm_power",
+                ]
+            ],
             # "weather_paths": [["test", "test"]],
             "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
             # "weather_paths": [["train_0_4_0.5", "test_0_4_0.5"]],
@@ -746,13 +786,13 @@ if __name__ == "__main__":
     }
     # models = DDPG.from_grid(
     #     dic,
-    #     repeat_run=1,
+    #     repeat_run=10,
     #     epochs=1000,
     #     training_iter=30,
     # )
     models = TD3.from_grid(
         dic,
-        repeat_run=1,
+        repeat_run=10,
         epochs=1000,
-        training_iter=20,
+        training_iter=50,
     )
