@@ -50,7 +50,7 @@ DEFAULT_PLOT_STATES = {
 }
 DEFAULT_NORM_DIC = {"power": 200, "voltage": 36}
 DEFAULT_LOG_PATH = Path("default")
-DEFAULT_REWARD = 3
+DEFAULT_REWARD = 0
 
 
 class CustomEnv(gym.Env, abc.ABC):
@@ -110,8 +110,8 @@ class CustomEnv(gym.Env, abc.ABC):
 
 class DummyEnv(CustomEnv):
     def __init__(self, max_steps: int = 100):
-        self.max_steps = max_steps
         super().__init__()
+        self.max_steps = max_steps
 
     def _reset(self) -> np.ndarray:
         """Reset the environment"""
@@ -168,6 +168,8 @@ class ShadedPVEnv(CustomEnv):
         plot_states: Optional[Dict[str, Union[str, Sequence[str]]]] = None,
         reward: int = 2,
     ):
+        super().__init__()
+
         self.pvarray = pvarray
         self.weather_dfs = [df for _, df in weather_df.groupby(weather_df.index.date)]
         # self.weather_df = weather_df
@@ -202,8 +204,6 @@ class ShadedPVEnv(CustomEnv):
         self._norm_dic = {} or dic_normalizer
         self._reward = reward
 
-        super().__init__()
-
     def __str__(self) -> str:
         return f"ShadedPVEnv"
 
@@ -216,10 +216,10 @@ class ShadedPVEnv(CustomEnv):
         self._save_history()
         self._history.clear()
         self._weather_comb = {}  # save all the unique weather combinations (ordered)
-        self._action: np.ndarray = self.action_space.sample() * 0
+        self._action = self.action_space.sample() * 0
         self._row_idx = -1
 
-        return self.step(action=np.array([0.0]))[0]
+        return self.step(action=self._action)[0]
 
     def _step(
         self, action: np.ndarray
@@ -234,6 +234,7 @@ class ShadedPVEnv(CustomEnv):
             ambient_temperature=self._current_amb_t,
         )
         self._add_history(res)
+        # Add weather to a set to save unique combinations
         self._weather_comb[(self._current_g, self._current_amb_t)] = None
 
         self._done = self._row_idx == len(self.weather_df) - 1
@@ -324,8 +325,6 @@ class ShadedPVEnv(CustomEnv):
             with open(self.path.joinpath("efficiency.txt"), "a") as f:
                 f.write(f"{self.time}:{eff:.2f}\n")
 
-            # print(f"Saved to {path}")
-
     def _plot_state_df(self, name: str, states: Union[str, Sequence[str]]) -> None:
         """Plot states the states and save to a file"""
         df = self.to_dataframe(self.history_all, rename_cols=False)
@@ -335,15 +334,18 @@ class ShadedPVEnv(CustomEnv):
         plt.close()
 
     def quit(self) -> None:
+        """"Save the dataframe and exit the MATLAB engine"""
         self.reset()  # Save if anything must be saved
         self.pvarray.quit()
 
     @property
     def done(self) -> bool:
+        """Return `True` if the episode is done"""
         return self._done
 
     @property
     def reward(self) -> numbers.Real:
+        """"Return the reward at each step"""
         rew = self._history["norm_delta_power"][-1]
 
         if self._reward == 0:
@@ -376,6 +378,7 @@ class ShadedPVEnv(CustomEnv):
 
     @property
     def history_all(self) -> Dict[str, Sequence[numbers.Real]]:
+        """Return all the states as a dictionary"""
         return self._history
 
     @property
