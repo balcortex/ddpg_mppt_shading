@@ -14,7 +14,7 @@ from torch.optim import Adam
 
 from tqdm import tqdm
 import src.policy
-from src.env import ShadedPVEnv
+from src.env import ShadedPVEnv, DummyEnv
 from src.experience import (
     Experience,
     ExperienceSource,
@@ -36,8 +36,8 @@ class Model(ABC):
         self,
         env: gym.Env,
         policy_name: str,
-        policy_kwargs: Dict[Any, Any],
-        exp_source_kwargs: Dict[Any, Any],
+        policy_kwargs: Optional[Dict[Any, Any]] = None,
+        exp_source_kwargs: Optional[Dict[Any, Any]] = None,
     ):
         policy_kwargs = policy_kwargs or {}
         exp_source_kwargs = exp_source_kwargs or {}
@@ -46,8 +46,6 @@ class Model(ABC):
         self.policy = self.get_policy(policy_name, self.env, policy_kwargs)
         self.exp_source = ExperienceSource(self.policy, self.env, **exp_source_kwargs)
 
-        self._save_config_dic()
-
     @abstractmethod
     def learn(self) -> None:
         """Run the learning process"""
@@ -55,17 +53,18 @@ class Model(ABC):
     def predict(self, obs: np.ndarray, info: Dict[str, Any]) -> np.ndarray:
         return self.policy(obs=obs, info=info)
 
-    def _save_config_dic(self) -> None:
-        config_path = self.path.joinpath("config.json")
-        with open(config_path, "w") as f:
-            f.write(json.dumps(self.all_config_dics()))
-
     def quit(self) -> None:
         self.env.quit()
 
     def play_episode(self) -> Sequence[Experience]:
         return self.exp_source.play_episode()
 
+    def save_config_dic(self) -> None:
+        config_path = self.path.joinpath("config.json")
+        with open(config_path, "w") as f:
+            f.write(json.dumps(self.all_config_dics))
+
+    @property
     def all_config_dics(self) -> Dict[str, Dict[str, str]]:
         dic = {
             "self": self.config_dic,
@@ -99,10 +98,9 @@ class Model(ABC):
         if policy_name not in dic.keys():
             raise NotImplementedError(f"The policy {policy_name} is not implemented")
 
-        policy_kwargs_ = policy_kwargs.copy()
-        policy_kwargs_["action_space"] = env.action_space
-
-        return getattr(src.policy, dic[policy_name])(**policy_kwargs_)
+        return getattr(src.policy, dic[policy_name])(
+            action_space=env.action_space, **policy_kwargs
+        )
 
 
 class DummyModel(Model):
@@ -110,15 +108,15 @@ class DummyModel(Model):
 
     def __init__(
         self,
-        env: gym.Env,
-        policy_name: str,
-        policy_kwargs: Dict[Any, Any],
-        exp_source_kwargs: Dict[Any, Any],
+        env: Optional[gym.Env] = None,
+        policy_name: Optional[Dict[Any, Any]] = None,
+        policy_kwargs: Optional[Dict[Any, Any]] = None,
+        exp_source_kwargs: Optional[Dict[Any, Any]] = None,
     ):
-        super().__init__(env, policy_name, policy_kwargs, exp_source_kwargs)
+        if not env:
+            env = DummyEnv()
 
-    def _save_config_dic(self) -> None:
-        pass
+        super().__init__(env, policy_name, policy_kwargs, exp_source_kwargs)
 
     def learn(self) -> None:
         pass
@@ -131,10 +129,10 @@ class PerturbObserveModel(Model):
         self,
         env_kwargs: Optional[Dict[Any, Any]] = None,
         policy_kwargs: Optional[Dict[Any, Any]] = None,
-        exp_source_kwargs: Dict[Any, Any] = None,
+        exp_source_kwargs: Optional[Dict[Any, Any]] = None,
     ):
         env_kwargs = env_kwargs or {}
-        env_kwargs.update({"num_envs": 1, "env_names": ["po"]})
+        env_kwargs.setdefault("env_names", "po")
         env = ShadedPVEnv.get_envs(**env_kwargs)
 
         super().__init__(
@@ -143,6 +141,8 @@ class PerturbObserveModel(Model):
             policy_kwargs=policy_kwargs,
             exp_source_kwargs=exp_source_kwargs,
         )
+
+        self.save_config_dic()
 
     def learn(self) -> None:
         return None
@@ -153,12 +153,12 @@ class RandomModel(Model):
 
     def __init__(
         self,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        policy_kwargs: Optional[Dict[Any, Any]] = None,
-        exp_source_kwargs: Dict[Any, Any] = None,
+        env_kwargs: Dict[Any, Any] = {},
+        policy_kwargs: Dict[Any, Any] = {},
+        exp_source_kwargs: Dict[Any, Any] = {},
     ):
         env_kwargs = env_kwargs or {}
-        env_kwargs.update({"num_envs": 1, "env_names": ["random"]})
+        env_kwargs.setdefault("env_names", "random")
         env = ShadedPVEnv.get_envs(**env_kwargs)
 
         super().__init__(
@@ -200,40 +200,18 @@ class DDPG(Model):
         """
         per: use the Prioritized Experience Buffer
         """
-        if env_kwargs is None:
-            env_kwargs_ = {}
-        else:
-            env_kwargs_ = env_kwargs.copy()
-        env_kwargs_.update(self._get_env_names())
-        env, self.env_test = ShadedPVEnv.get_envs(**env_kwargs_)
+        env_kwargs = env_kwargs or {}
+        env_kwargs.setdefault("env_names", ["ddpg_train", "ddpg_test"])
+        env, self.env_test = ShadedPVEnv.get_envs(**env_kwargs)
+        self.actor, self.critic = rl.create_mlp_actor_critic(env=env)
 
-        self.actor, self.critic = rl.create_mlp_actor_critic(
-            env=env, weight_init_fn=None
-        )
-
-        if test_policy_kwargs is None:
-            test_policy_kwargs = {}
-        else:
-            test_policy_kwargs = test_policy_kwargs.copy()
+        test_policy_kwargs = test_policy_kwargs or {}
         test_policy_kwargs.update({"net": self.actor})
-        test_policy = self.get_policy(
-            "mlp",
-            self.env_test,
-            policy_kwargs=test_policy_kwargs,
-        )
+        test_policy = self.get_policy("mlp", self.env_test, test_policy_kwargs)
+
         self.gamma = gamma
         self.n_steps = n_steps
-        exp_source_kwargs = {"gamma": gamma, "n_steps": n_steps}
-        self.agent_test_source = ExperienceSource(
-            test_policy, self.env_test, exp_source_kwargs
-        )
-
         self.use_per = use_per
-        self.buffer = (
-            ReplayBuffer(**buffer_kwargs)
-            if not use_per
-            else PrioritizedReplayBuffer(**buffer_kwargs)
-        )
         self.batch_size = batch_size
         self.tau_critic = tau_critic
         self.tau_actor = tau_actor
@@ -242,70 +220,88 @@ class DDPG(Model):
         self.collect_steps = collect_steps
         self.warmup = warmup
 
+        self.agent_test_source = ExperienceSource(
+            test_policy, self.env_test, gamma=gamma, n_steps=n_steps
+        )
+        self.buffer = (
+            ReplayBuffer(**buffer_kwargs)
+            if not use_per
+            else PrioritizedReplayBuffer(**buffer_kwargs)
+        )
         self.actor_optim = Adam(
             self.actor.parameters(), lr=actor_lr, weight_decay=actor_l2
         )
         self.critic_optim = Adam(
             self.critic.parameters(), lr=critic_lr, weight_decay=critic_l2
         )
-
         self.actor_target = rl.TargetNet(self.actor)
         self.critic_target = rl.TargetNet(self.critic)
         self.actor_target.sync()
         self.critic_target.sync()
 
-        if policy_kwargs is None:
-            policy_kwargs_ = {}
-        else:
-            policy_kwargs_ = policy_kwargs.copy()
-        policy_kwargs_.update({"net": self.actor})
+        policy_kwargs = policy_kwargs or {}
+        policy_kwargs.update({"net": self.actor})
         super().__init__(
             env,
             policy_name="mlp",
-            policy_kwargs=policy_kwargs_,
-            exp_source_kwargs=exp_source_kwargs,
+            policy_kwargs=policy_kwargs,
+            exp_source_kwargs={"gamma": gamma, "n_steps": n_steps},
         )
 
         # Explore policy
         random_policy = RandomPolicy(env.action_space)
         self.warmup_exp_source = ExperienceSource(random_policy, env, gamma, n_steps)
 
-        # After calling super the class members are not saved
-
         # Fill replay buffer
         fill_steps = prefill_buffer or batch_size
         for _ in tqdm(range(fill_steps), desc="Pre-filling replay buffer"):
-            # self.buffer.append(self.collect_exp_source.play_n_steps())
             self.buffer.append(self.warmup_exp_source.play_n_steps())
 
         self.step_counter = 0
         self.actor_loss = []
         self.critic_loss = []
 
-        self._pre_warmup_init()
-
-        # Warm-up training
-        for i in tqdm(range(1, self.warmup + 1), desc="Warm-up training"):
-            self._train_net(train_steps=1)
-
-    def _pre_warmup_init(self) -> None:
-        pass
+        self._pre_trained = False
 
     def learn(
         self,
         epochs: int = 1000,
     ) -> None:
-        for i in tqdm(range(1, epochs + 1), desc="Training"):
+        if not self._pre_trained:
+            for i in tqdm(range(1, self.warmup + 1), desc="Warm-up training"):
+                self._train_net(train_steps=1)
+            self._pre_trained = True
 
+        for i in tqdm(range(1, epochs + 1), desc="Training"):
             self._train_net(self.train_steps)
             self._collect_steps(self.collect_steps)
 
-    @property
-    def collect_exp_source(self) -> ExperienceSource:
-        return self.exp_source
+    def plot_loss(self, loss: str) -> matplotlib.figure.Figure:
+        """
+        loss: 'critic_loss' or 'actor_loss'
+        """
 
-    def _get_env_names(self) -> Dict[str, Any]:
-        return {"num_envs": 2, "env_names": ["ddpg_train", "ddpg_test"]}
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+
+        ax.plot(range(self.step_counter), getattr(self, loss))
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel(loss)
+
+        if "critic" in loss:
+            ax.set_yscale("log")
+
+        return fig
+
+    def save_plot_losses(self) -> None:
+        fig_actor_loss = self.plot_loss("actor_loss")
+        fig_critic_loss = self.plot_loss("critic_loss")
+
+        fig_actor_loss.savefig(self.path.joinpath("actor_loss.png"))
+        fig_critic_loss.savefig(self.path.joinpath("critic_loss.png"))
+
+        plt.close(fig_actor_loss)
+        plt.close(fig_critic_loss)
 
     def _train_net(self, train_steps: int) -> None:
         for _ in range(train_steps):
@@ -314,7 +310,6 @@ class DDPG(Model):
 
             # We do this since each weight will squared in MSE loss
             weights = np.sqrt(batch.weights)
-            # weights = batch.weights
 
             # Critic training
             q_target = self.critic_target(
@@ -348,7 +343,7 @@ class DDPG(Model):
             # Update priorities of experiences with TD errors
             if self.use_per:
                 error_np = weighted_td_error.detach().cpu().numpy()
-                new_priorities = np.abs(error_np)  # + 1e-6
+                new_priorities = np.abs(error_np) + 1e-6
                 self.buffer.update_priorities(batch.indices, new_priorities)
 
             # Keep track of losses
@@ -396,6 +391,21 @@ class DDPG(Model):
             obs, action, reward, done, next_obs, weights, indices
         )
 
+    @property
+    def collect_exp_source(self) -> ExperienceSource:
+        return self.exp_source
+
+    @property
+    def config_dic(self) -> Dict[str, Dict[str, str]]:
+        dic = {k: str(v) for k, v in self.__dict__.items()}
+        return dic
+
+    @property
+    def all_config_dics(self) -> Dict[str, Dict[str, str]]:
+        dic = super().all_config_dics
+        dic.update({"buffer": self.buffer.config_dic})
+        return dic
+
     @classmethod
     def from_grid(
         cls,
@@ -406,7 +416,7 @@ class DDPG(Model):
         **kwargs,
     ) -> Sequence[DDPG]:
         # Get a permutation of the dic if needed
-        gg = src.utils.grid_generator_nested(dic)
+        gg = src.utils.grid_product(dic)
         for dic in gg:
             for _ in range(repeat_run):
                 model = cls(**dic, **kwargs)
@@ -418,43 +428,6 @@ class DDPG(Model):
                 model.quit()
 
         return model
-
-    @property
-    def config_dic(self) -> Dict[str, Dict[str, str]]:
-        dic = {k: str(v) for k, v in self.__dict__.items()}
-        return dic
-
-    def all_config_dics(self) -> Dict[str, Dict[str, str]]:
-        dic = super().all_config_dics()
-        dic.update({"buffer": self.buffer.config_dic})
-        return dic
-
-    def plot_loss(self, loss: str) -> matplotlib.figure.Figure:
-        """
-        loss: 'critic_loss' or 'actor_loss'
-        """
-
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
-
-        ax.plot(range(self.step_counter), getattr(self, loss))
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel(loss)
-
-        if "critic" in loss:
-            ax.set_yscale("log")
-
-        return fig
-
-    def save_plot_losses(self) -> None:
-        fig_actor_loss = self.plot_loss("actor_loss")
-        fig_critic_loss = self.plot_loss("critic_loss")
-
-        fig_actor_loss.savefig(self.path.joinpath("actor_loss.png"))
-        fig_critic_loss.savefig(self.path.joinpath("critic_loss.png"))
-
-        plt.close(fig_actor_loss)
-        plt.close(fig_critic_loss)
 
 
 class TD3(DDPG):
@@ -702,6 +675,7 @@ class TD3(DDPG):
 
 
 if __name__ == "__main__":
+    pass
     # model = PerturbObserveModel(
     #     env_kwargs={"env_names": ["po_testt"], "weather_paths": ["test_1_4_0.5"]}
     # )
@@ -784,15 +758,15 @@ if __name__ == "__main__":
             # "weather_paths": [["test_uniform", "test_uniform"]],
         },
     }
-    # models = DDPG.from_grid(
-    #     dic,
-    #     repeat_run=10,
-    #     epochs=1000,
-    #     training_iter=30,
-    # )
-    models = TD3.from_grid(
+    models = DDPG.from_grid(
         dic,
         repeat_run=10,
         epochs=1000,
-        training_iter=50,
+        training_iter=30,
     )
+    # models = TD3.from_grid(
+    #     dic,
+    #     repeat_run=10,
+    #     epochs=1000,
+    #     training_iter=50,
+    # )

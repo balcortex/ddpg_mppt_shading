@@ -192,6 +192,15 @@ def grid_combination(dic: Dict[Any, Any]) -> Generator[Dict[Any, Any], None, Non
     return (dict(zip(keys, v)) for v in zip(*values))
 
 
+def copy_dic(dic: Optional[Dict[Any, Any]]) -> Dict[Any, Any]:
+    """
+    Return a copy of the dictionary or an empty dictionary if no one is provided
+    """
+    if dic is not None:
+        return dic.copy()
+    return {}
+
+
 if __name__ == "__main__":
     # dic = {
     #     "bel": "hola",

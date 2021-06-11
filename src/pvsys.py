@@ -258,7 +258,9 @@ class ShadedArray:
         if self.is_cached_mpp:
             return MPP.from_string(self.cache_mpp[self.key_mpp])
         else:
-            curves = self.get_shaded_iv_curve(curve_points, verbose=verbose)
+            curves = self.get_shaded_iv_curve(
+                curve_points=curve_points, verbose=verbose
+            )
             power = self.power(curves.current, curves.voltage)
             idx = np.argmax(power)
 

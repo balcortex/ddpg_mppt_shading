@@ -110,8 +110,8 @@ class CustomEnv(gym.Env, abc.ABC):
 
 class DummyEnv(CustomEnv):
     def __init__(self, max_steps: int = 100):
-        super().__init__()
         self.max_steps = max_steps
+        super().__init__()
 
     def _reset(self) -> np.ndarray:
         """Reset the environment"""
@@ -166,10 +166,8 @@ class ShadedPVEnv(CustomEnv):
         dic_normalizer: Optional[Dict[str, numbers.Real]] = None,
         log_path: Optional[Path] = None,
         plot_states: Optional[Dict[str, Union[str, Sequence[str]]]] = None,
-        reward: int = 2,
+        reward: int = 0,
     ):
-        super().__init__()
-
         self.pvarray = pvarray
         self.weather_dfs = [df for _, df in weather_df.groupby(weather_df.index.date)]
         # self.weather_df = weather_df
@@ -203,6 +201,8 @@ class ShadedPVEnv(CustomEnv):
 
         self._norm_dic = {} or dic_normalizer
         self._reward = reward
+
+        super().__init__()
 
     def __str__(self) -> str:
         return f"ShadedPVEnv"
