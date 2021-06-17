@@ -1,8 +1,8 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, Union
-from copy import deepcopy
 
+import stable_baselines3 as sb3
 from gym import spaces
 import numpy as np
 import torch as th
@@ -272,6 +272,44 @@ class MLPPolicy(Policy):
 
     def __str__(self) -> str:
         return "MLPPolicy"
+
+
+class SB3Policy(Policy):
+    """
+    Interface between sb3 model and policy class
+
+    Parameters:
+        action_space: the action space of the environment
+    """
+
+    def __init__(
+        self,
+        model: sb3.common.base_class.BaseAlgorithm,
+        deterministic: bool = False,
+    ):
+        self.model = model
+        self.deterministic = deterministic
+
+    def __call__(
+        self,
+        obs: np.ndarray,
+        info: Optional[Dict[Any, Any]] = None,
+    ) -> Union[float, np.ndarray]:
+        """
+        Get an action according to the observation
+
+        Paramters:
+            obs: the observations from the environment
+            info: not used
+        """
+        return self.model.predict(obs, deterministic=self.deterministic)[0]
+
+    def __str__(self):
+        return f"SB3_{self.model.__class__.__name__}"
+
+    @property
+    def config_dic(self) -> Dict[str, str]:
+        return {str(self): None}
 
 
 if __name__ == "__main__":

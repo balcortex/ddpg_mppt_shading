@@ -16,7 +16,7 @@ def exp(model_name: str, kwargs: Dict[Any, Any], iters: int = 300) -> None:
         num_envs=2,
         log_path=path,
         env_names=["train", "test"],
-        weather_paths=["train_1_4_0.5", "test_1_4_0.5"],
+        weather_paths=["test_1_4_0.5", "test_1_4_0.5"],
     )
 
     utils.save_dic_txt(
