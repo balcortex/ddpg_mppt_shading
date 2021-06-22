@@ -45,7 +45,7 @@ DEFAULT_LOG_STATES = (
 )
 DEFAULT_PLOT_STATES = {
     # key -> filename, val -> plot from df
-    "power": ("power", "optimum_power"),
+    # "power": ("power", "optimum_power"),
     "duty_cycle": ("duty_cycle", "optimum_duty_cycle"),
 }
 DEFAULT_NORM_DIC = {"power": 200, "voltage": 36}
@@ -216,7 +216,7 @@ class ShadedPVEnv(CustomEnv):
         self._save_history()
         self._history.clear()
         self._weather_comb = {}  # save all the unique weather combinations (ordered)
-        self._action = self.action_space.sample() * 0
+        self._action = np.array([0.25])
         self._row_idx = -1
 
         return self.step(action=self._action)[0]
@@ -304,7 +304,7 @@ class ShadedPVEnv(CustomEnv):
         else:
             raise KeyError(f"The state `{state_name}` is not recognized")
 
-    def _save_history(self, minimim_length: int = 100) -> None:
+    def _save_history(self, minimim_length: int = 10) -> None:
         # Save the history if any
         if self._row_idx > minimim_length:
             self._now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
