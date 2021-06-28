@@ -1,10 +1,11 @@
 from pathlib import Path
 from typing import Sequence
+import numpy as np
 
 # algs = ["PO", "DDPG", "TD3", "SAC", "A2C", "PPO"]
 path = Path("default/")
-txts = path.glob("*test/efficiency.txt")
-# txts = path.glob("*/efficiency.txt")
+# txts = path.glob("*test/efficiency.txt")
+txts = path.glob("*train/efficiency.txt")
 
 effs = [f.read_text().strip().split("\n") for f in txts]
 
@@ -25,6 +26,13 @@ def last_eff(seq: Sequence[str]) -> float:
     return effs[-1], dates[-1]
 
 
+def mean_eff(seq: Sequence[str]) -> float:
+    effs = [float(eff) for s in seq for _, eff in [s.split(":")]]
+    dates = [date for s in seq for date, _ in [s.split(":")]]
+
+    return round(np.mean(effs), 2), dates[-1]
+
+
 max_effs = [max_eff(eff) for eff in effs]
 for e in sorted(max_effs, reverse=True):
     print(e)
@@ -32,6 +40,11 @@ for e in sorted(max_effs, reverse=True):
 print()
 last_effs = [last_eff(eff) for eff in effs]
 for e in last_effs:
+    print(e)
+
+print()
+mean_effs = [mean_eff(eff) for eff in effs]
+for e in mean_effs:
     print(e)
 
 

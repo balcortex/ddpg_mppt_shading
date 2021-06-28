@@ -4,7 +4,7 @@ import json
 import numbers
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Sequence, Union
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import gym
 import matplotlib
@@ -238,6 +238,23 @@ class TrainableModel(Model):
     def collect_exp_source(self) -> ExperienceSource:
         return self.exp_source
 
+    @staticmethod
+    def apply_losses(losses: Sequence[th.Tensor], optim: Adam) -> None:
+
+        losses = th.cat(tuple(l.unsqueeze(-1) for l in losses))
+
+        if all(th.isnan(losses)):
+            return th.tensor(np.nan)
+
+        mask = th.isnan(losses)
+        total_loss = th.sum(losses[~mask])
+
+        optim.zero_grad()
+        total_loss.backward()
+        optim.step()
+
+        return total_loss
+
     @classmethod
     def run_from_grid(
         cls,
@@ -460,7 +477,7 @@ class DDPG(TrainableModel):
         norm_rewards: int = 0,
         train_steps: int = 1,
         collect_steps: int = 1,
-        prefill_buffer: Optional[int] = None,
+        prefill_buffer: int = 0,
         use_per: bool = False,
         warmup: int = 0,
     ):
@@ -478,14 +495,12 @@ class DDPG(TrainableModel):
 
         self.gamma = gamma
         self.n_steps = n_steps
-        self.use_per = use_per
         self.batch_size = batch_size
         self.tau_critic = tau_critic
         self.tau_actor = tau_actor
         self.norm_rewards = norm_rewards
         self.train_steps = train_steps
         self.collect_steps = collect_steps
-        self.prefill_buffer = prefill_buffer
         self.warmup = warmup
 
         self.agent_exp_source = ExperienceSource(
@@ -520,7 +535,20 @@ class DDPG(TrainableModel):
         self.actor_loss = []
         self.critic_loss = []
 
-        self._prefill_buffer()
+        # Fill replay buffer with random policy (explore policy)
+        random_policy = RandomPolicy(self.env.action_space)
+        explore_exp_source = ExperienceSource(
+            random_policy, self.env, self.gamma, self.n_steps
+        )
+        # if warmup:
+        #     prefill_buffer = prefill_buffer or batch_size
+        self.fill_buffer(
+            self.buffer,
+            explore_exp_source,
+            num_experiences=prefill_buffer,
+            description="Filling buffer with random experiences",
+        )
+
         self._pre_trained = False
 
         self.save_config_dic()
@@ -531,12 +559,13 @@ class DDPG(TrainableModel):
     ) -> None:
         if not self._pre_trained:
             for i in tqdm(range(1, self.warmup + 1), desc="Warm-up training"):
-                self._train_net(train_steps=1)
+                self._train_nets(train_steps=1)
             self._pre_trained = True
 
         for i in tqdm(range(1, epochs + 1), desc="Training"):
-            self._train_net(self.train_steps)
-            self._collect_steps(self.collect_steps)
+            self._train_nets(self.train_steps)
+            # Collect steps using the trained policy
+            self.fill_buffer(self.buffer, self.collect_exp_source, num_experiences=1)
 
     def plot_loss(self, loss: str, log: bool = False) -> matplotlib.figure.Figure:
         """
@@ -546,7 +575,11 @@ class DDPG(TrainableModel):
         fig = plt.figure()
         ax = fig.add_subplot(111)
 
-        ax.plot(range(self.step_counter), getattr(self, loss))
+        x = np.arange(self.step_counter)
+        y = np.array(getattr(self, loss))
+        mask = np.isfinite(y)
+
+        ax.plot(x[mask], y[mask])
         ax.set_xlabel("Epoch")
         ax.set_ylabel(loss)
 
@@ -565,114 +598,293 @@ class DDPG(TrainableModel):
         plt.close(fig_actor_loss)
         plt.close(fig_critic_loss)
 
-    def _train_net(self, train_steps: int) -> None:
+    def _train_nets(self, train_steps: int) -> None:
         for _ in range(train_steps):
             self.step_counter += 1
-            batch = self._prepare_batch()
 
-            # We do this since each weight will squared in MSE loss
-            weights = np.sqrt(batch.weights)
+            batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
 
-            # Critic training
-            q_target = self.critic_target(
-                batch.next_obs, self.actor_target(batch.next_obs)
-            )
-            q_target[batch.done] = 0.0
-            y = (batch.reward + q_target * self.gamma ** self.n_steps).detach()
-            q = self.critic(batch.obs, batch.action)
-            td_error = y - q
-            weighted_td_error = th.mul(td_error, weights)
+            critic_loss = self._get_critic_loss(batch, self.buffer)
+            critic_loss = self.apply_losses([critic_loss], self.critic_optim)
 
-            # Create a zero tensor to compare against
-            zero_tensor = th.zeros_like(weighted_td_error)
-            critic_loss = th.nn.functional.mse_loss(weighted_td_error, zero_tensor)
+            actor_loss = self._get_actor_loss(batch)
+            actor_loss = self.apply_losses([actor_loss], self.actor_optim)
 
-            self.critic_optim.zero_grad()
-            critic_loss.backward()
-            self.critic_optim.step()
-
-            # Actor trainig
-            actor_loss = -self.critic(batch.obs, self.actor(batch.obs)).mean()
-
-            self.actor_optim.zero_grad()
-            actor_loss.backward()
-            self.actor_optim.step()
-
+            # Update target networks
             self.critic_target.alpha_sync(self.tau_critic)
             self.actor_target.alpha_sync(self.tau_actor)
-
-            # For prioritized exprience replay
-            # Update priorities of experiences with TD errors
-            if self.use_per:
-                error_np = weighted_td_error.detach().cpu().numpy()
-                new_priorities = np.abs(error_np) + 1e-6
-                self.buffer.update_priorities(batch.indices, new_priorities)
 
             # Keep track of losses
             self.critic_loss.append(critic_loss.detach().numpy())
             self.actor_loss.append(actor_loss.detach().numpy())
 
-    def _prefill_buffer(self) -> None:
-        # Explore policy
-        random_policy = RandomPolicy(self.env.action_space)
-        self.warmup_exp_source = ExperienceSource(
-            random_policy, self.env, self.gamma, self.n_steps
-        )
+    def _get_critic_loss(
+        self, batch: ExperienceTensorBatch, buffer: ReplayBuffer
+    ) -> th.Tensor:
+        if batch is None:
+            return th.tensor(np.nan)
 
-        # Fill replay buffer
-        fill_steps = self.prefill_buffer or self.batch_size
-        for _ in tqdm(range(fill_steps), desc="Pre-filling replay buffer"):
-            self.buffer.append(self.warmup_exp_source.play_n_steps())
+        weights = np.sqrt(batch.weights)
 
-    def _collect_steps(self, collect_steps: int) -> None:
-        for _ in range(collect_steps):
-            self.buffer.append(self.collect_exp_source.play_n_steps())
+        q_target = self.critic_target(batch.next_obs, self.actor_target(batch.next_obs))
+        q_target[batch.done] = 0.0
+        y = (batch.reward + q_target * self.gamma ** self.n_steps).detach()
+        q = self.critic(batch.obs, batch.action)
 
-    def _prepare_batch(
-        self, buffer: Optional[ReplayBuffer] = None
-    ) -> PrioritizedExperienceTensorBatch:
-        "Get a training batch for network's weights update"
+        td_error = y - q
+        weighted_td_error = th.mul(td_error, weights)
 
-        buffer = buffer or self.buffer
+        # Update PER priorities if needed
+        self.update_priorities(buffer, batch.indices, weighted_td_error)
 
-        batch = buffer.sample(self.batch_size)
-        obs = th.tensor(batch.obs, dtype=th.float32)
-        action = th.tensor(batch.action, dtype=th.float32)
-        reward = th.tensor(batch.reward, dtype=th.float32)
-        done = th.tensor(batch.done, dtype=th.bool)
-        next_obs = th.tensor(batch.next_obs, dtype=th.float32)
+        # Create a zero tensor to compare against
+        zero_tensor = th.zeros_like(weighted_td_error)
 
-        if self.norm_rewards == 1:
-            reward = reward - buffer.total_mean_rew
-        elif self.norm_rewards == 2:
-            mean, std = buffer.reward_mean_std()
-            reward = (reward - mean) / (std + 1e-6)
-        elif self.norm_rewards == 3:
-            reward = (reward - reward.mean()) / (reward.std() + 1e-6)
-        elif self.norm_rewards == 4:
-            reward = (reward - buffer.min_rew) / (buffer.max_rew - buffer.min_rew)
-        else:
-            pass
+        return th.nn.functional.mse_loss(weighted_td_error, zero_tensor)
 
-        if self.use_per:
-            weights = th.tensor(batch.weights, dtype=th.float32)
-            indices = batch.indices
-        else:
-            weights = th.ones_like(reward)
-            indices = np.array([1])  # dummy data
+    def _get_actor_loss(self, batch: PrioritizedExperienceTensorBatch) -> None:
+        if batch is None:
+            return th.tensor(np.nan)
 
-        reward = reward.reshape((self.batch_size, 1))
-        weights = weights.reshape((self.batch_size, 1))
+        loss = -self.critic(batch.obs, self.actor(batch.obs))
+        w_loss = th.mul(loss, batch.weights)
+        mean_ = w_loss.mean()
+        return mean_
 
-        return PrioritizedExperienceTensorBatch(
-            obs, action, reward, done, next_obs, weights, indices
-        )
+        # return -self.critic(batch.obs, self.actor(batch.obs)).mean()
 
     @property
     def all_config_dics(self) -> Dict[str, Dict[str, str]]:
         dic = super().all_config_dics
         dic.update({"buffer": self.buffer.config_dic})
         return dic
+
+    @staticmethod
+    def prepare_batch(
+        buffer: ReplayBuffer,
+        batch_size: int,
+        norm_rewards: int = 0,
+    ) -> PrioritizedExperienceTensorBatch:
+        "Get a training batch for network's weights update"
+
+        if len(buffer) < batch_size:
+            return None
+
+        batch = buffer.sample(batch_size)
+        obs = th.tensor(batch.obs, dtype=th.float32)
+        action = th.tensor(batch.action, dtype=th.float32)
+        reward = th.tensor(batch.reward, dtype=th.float32)
+        done = th.tensor(batch.done, dtype=th.bool)
+        next_obs = th.tensor(batch.next_obs, dtype=th.float32)
+
+        if norm_rewards == 0:
+            pass
+        elif norm_rewards == 1:
+            reward = reward - buffer.total_mean_rew
+        elif norm_rewards == 2:
+            mean, std = buffer.reward_mean_std()
+            reward = (reward - mean) / (std + 1e-6)
+        elif norm_rewards == 3:
+            reward = (reward - reward.mean()) / (reward.std() + 1e-6)
+        elif norm_rewards == 4:
+            reward = (reward - buffer.min_rew) / (buffer.max_rew - buffer.min_rew)
+        else:
+            raise NotImplementedError()
+
+        if isinstance(buffer, PrioritizedReplayBuffer):
+            weights = th.tensor(batch.weights, dtype=th.float32)
+            indices = batch.indices
+        else:
+            weights = th.ones_like(reward)
+            indices = np.array([1])  # dummy data
+
+        reward = reward.reshape((batch_size, 1))
+        weights = weights.reshape((batch_size, 1))
+
+        return PrioritizedExperienceTensorBatch(
+            obs, action, reward, done, next_obs, weights, indices
+        )
+
+    @staticmethod
+    def fill_buffer(
+        buffer: ReplayBuffer,
+        exp_source: ExperienceSource,
+        num_experiences: Optional[int] = None,
+        description: Optional[str] = None,
+    ):
+        if num_experiences == -1:
+            num_experiences = buffer.capacity
+
+        for _ in tqdm(
+            range(num_experiences), desc=description, disable=description is None
+        ):
+            exp = exp_source.play_n_steps()
+            buffer.append(exp)
+
+    @staticmethod
+    def update_priorities(
+        buffer: PrioritizedReplayBuffer,
+        indices: np.ndarray,
+        error: th.Tensor,
+    ) -> None:
+        if not isinstance(buffer, PrioritizedReplayBuffer):
+            return None
+
+        prio_np = th.abs(error).detach().cpu().numpy() + 1e-6
+        buffer.update_priorities(indices, prio_np)
+
+
+class DDPGExp(DDPG):
+    def __init__(
+        self,
+        env_kwargs: Optional[Dict[Any, Any]] = None,
+        policy_kwargs: Optional[Dict[Any, Any]] = None,
+        test_policy_kwargs: Optional[Dict[Any, Any]] = None,
+        buffer_kwargs: Optional[Dict[Any, Any]] = None,
+        demo_buffer_kwargs: Optional[Dict[Any, Any]] = None,
+        batch_size: int = 64,
+        actor_lr: float = 1e-4,
+        critic_lr: float = 1e-3,
+        actor_l2: float = 0.0,
+        critic_l2: float = 0.0,
+        tau_critic: float = 1e-3,
+        tau_actor: float = 1e-3,
+        gamma: float = 0.99,
+        n_steps: int = 1,
+        norm_rewards: int = 0,
+        train_steps: int = 1,
+        collect_steps: int = 1,
+        prefill_buffer: int = 0,
+        use_per: bool = False,
+        warmup: int = 0,
+        lambda_bc: float = 0.1,
+        use_q_filter: bool = False,
+    ):
+
+        env_kwargs = src.utils.new_dic(env_kwargs)
+        env_kwargs.setdefault("env_names", ["ddpgexp_train", "ddpgexp_test"])
+
+        super().__init__(
+            env_kwargs=env_kwargs,
+            policy_kwargs=policy_kwargs,
+            buffer_kwargs=buffer_kwargs,
+            test_policy_kwargs=test_policy_kwargs,
+            batch_size=batch_size,
+            actor_lr=actor_lr,
+            critic_lr=critic_lr,
+            actor_l2=actor_l2,
+            critic_l2=critic_l2,
+            tau_critic=tau_critic,
+            tau_actor=tau_actor,
+            gamma=gamma,
+            n_steps=n_steps,
+            norm_rewards=norm_rewards,
+            train_steps=train_steps,
+            collect_steps=collect_steps,
+            prefill_buffer=prefill_buffer,
+            use_per=use_per,
+            warmup=warmup,
+        )
+
+        self.lambda_bc = lambda_bc
+        self.use_q_filter = use_q_filter
+
+        self.bc_loss = []
+        self.q_filter_num = []
+
+        self.demo_buffer = (
+            ReplayBuffer(**demo_buffer_kwargs)
+            if not use_per
+            else PrioritizedReplayBuffer(**demo_buffer_kwargs)
+        )
+
+        # Fill demo buffer
+        po_policy = PerturbObservePolicy(self.env.action_space)
+        expert_exp_source = ExperienceSource(
+            po_policy, self.env, self.gamma, self.n_steps
+        )
+        self.fill_buffer(
+            self.demo_buffer,
+            expert_exp_source,
+            num_experiences=-1,
+            description="Filling demo buffer",
+        )
+
+        self.save_config_dic()
+
+    def _train_nets(self, train_steps: int) -> None:
+        for _ in range(train_steps):
+            self.step_counter += 1
+
+            batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
+            demo_batch = self.prepare_batch(
+                self.demo_buffer, self.batch_size, self.norm_rewards
+            )
+
+            critic_loss_rl = self._get_critic_loss(batch, self.buffer)
+            critic_loss_demo = self._get_critic_loss(demo_batch, self.demo_buffer)
+            critic_loss = self.apply_losses(
+                [critic_loss_rl, critic_loss_demo], self.critic_optim
+            )
+
+            actor_loss_rl = self._get_actor_loss(batch)
+            actor_loss_demo = self._get_actor_loss(demo_batch)
+            actor_loss_bc = self._get_bc_loss(demo_batch)
+            actor_loss = self.apply_losses(
+                [actor_loss_rl, actor_loss_demo, actor_loss_bc], self.actor_optim
+            )
+
+            # Update target networks
+            self.critic_target.alpha_sync(self.tau_critic)
+            self.actor_target.alpha_sync(self.tau_actor)
+
+            # Keep track of losses
+            self.critic_loss.append(critic_loss.detach().numpy())
+            self.actor_loss.append(actor_loss.detach().numpy())
+
+    def _get_bc_loss(self, demo_batch: ExperienceTensorBatch) -> th.Tensor:
+        agent_action = self.actor(demo_batch.obs)
+
+        if self.use_q_filter:
+            q_expert = self.critic(demo_batch.obs, demo_batch.action)
+            q_agent = self.critic(demo_batch.obs, agent_action)
+            ind = (q_expert > q_agent).detach()
+            q_filter_num = sum(ind)
+        else:
+            ind = th.ones_like(agent_action, dtype=th.bool)
+            q_filter_num = 0
+
+        error = demo_batch.action[ind] - agent_action[ind]
+
+        demo_weights = np.sqrt(demo_batch.weights)
+        weighted_error = th.mul(error, demo_weights[ind])
+        zero_tensor = th.zeros_like(weighted_error)
+        bc_loss = th.nn.functional.mse_loss(weighted_error, zero_tensor)
+
+        # zero_tensor = th.zeros_like(error)
+        # bc_loss = th.nn.functional.mse_loss(error, zero_tensor)
+
+        bc_loss *= self.lambda_bc
+
+        # if th.isnan(bc_loss):
+        #     pass
+        # else:
+        #     self.update_priorities(self.demo_buffer, demo_batch.indices, weighted_error)
+
+        self.bc_loss.append(bc_loss.detach().cpu().numpy())
+        self.q_filter_num.append(q_filter_num)
+
+        return bc_loss
+
+    def save_plot_losses(self) -> None:
+        super().save_plot_losses()
+        bc_loss = self.plot_loss("bc_loss", log=True)
+        bc_loss.savefig(self.path.joinpath("bc_loss.png"))
+        plt.close(bc_loss)
+
+        q_f = self.plot_loss("q_filter_num")
+        q_f.savefig(self.path.joinpath("q_filter_num.png"))
+        plt.close(q_f)
 
 
 class TD3(DDPG):
@@ -699,7 +911,6 @@ class TD3(DDPG):
         warmup: int = 0,
         policy_delay: int = 2,
         target_action_epsilon_noise: float = 0.001,
-        training_type: int = 0,
     ):
         env_kwargs = env_kwargs or {}
         env_kwargs.setdefault("env_names", ["td3_train", "td3_test"])
@@ -728,7 +939,6 @@ class TD3(DDPG):
 
         self.policy_delay = policy_delay
         self.target_epsilon_noise = target_action_epsilon_noise
-        self.training_type = training_type
 
         self.critic2_loss = []
         self.critic2 = rl.create_mlp_critic(self.env, weight_init_fn=None)
@@ -742,107 +952,183 @@ class TD3(DDPG):
 
         self.save_config_dic()
 
-    def _train_net(self, train_steps: int) -> None:
+    def _get_critic_loss(
+        self, batch: ExperienceTensorBatch, buffer: ReplayBuffer
+    ) -> Tuple[th.Tensor, th.Tensor]:
+        if batch is None:
+            return th.tensor(np.nan), th.Tensor(np.nan)
+
+        weights = np.sqrt(batch.weights)
+
+        # Add noise to the actions
+        act_target = self.actor_target(batch.next_obs)
+        noise = th.rand_like(act_target) * 2 - 1  # Normal noise between [-1, 1]
+        act_target += noise * self.target_epsilon_noise
+        act_target = act_target.clamp(-1, 1)
+
+        # Critics training
+        q_critic1 = self.critic_target(batch.next_obs, act_target)
+        q_critic2 = self.critic2_target(batch.next_obs, act_target)
+        q_critic1[batch.done] = 0.0
+        q_critic2[batch.done] = 0.0
+
+        # Compute target with the minumim of both critics
+        y = (
+            batch.reward + th.min(q_critic1, q_critic2) * self.gamma ** self.n_steps
+        ).detach()
+
+        # Critic 1 training
+        q_target_1 = self.critic(batch.obs, batch.action)
+        td_error_1 = y - q_target_1
+        weighted_td_error_1 = th.mul(td_error_1, weights)
+        zero_tensor_1 = th.zeros_like(weighted_td_error_1)
+        critic_loss_1 = th.nn.functional.mse_loss(weighted_td_error_1, zero_tensor_1)
+
+        # Critic 2 training
+        q_target_2 = self.critic2(batch.obs, batch.action)
+        td_error_2 = y - q_target_2
+        weighted_td_error_2 = th.mul(td_error_2, weights)
+        zero_tensor_2 = th.zeros_like(weighted_td_error_2)
+        critic_loss_2 = th.nn.functional.mse_loss(weighted_td_error_2, zero_tensor_2)
+
+        # Update PER priorities if needed
+        self.update_priorities(buffer, batch.indices, weighted_td_error_1)
+
+        return critic_loss_1, critic_loss_2
+
+    def _train_nets(self, train_steps: int) -> None:
         for _ in range(train_steps):
             self.step_counter += 1
-            batch = self._prepare_batch()
 
-            # We do this since each weight will squared in MSE loss
-            weights = np.sqrt(batch.weights)
+            batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
 
-            # Add noise to the actions
-            act_target = self.actor_target(batch.next_obs)
-            noise = th.rand_like(act_target) * 2 - 1  # Normal noise between [-1, 1]
-            act_target += noise * self.target_epsilon_noise
-            act_target = act_target.clamp(-1, 1)
+            critic_loss, critic2_loss = self._get_critic_loss(batch, self.buffer)
+            critic_loss = self.apply_losses([critic_loss], self.critic_optim)
+            critic2_loss = self.apply_losses([critic2_loss], self.critic2_optim)
 
-            # Critics training
-            q_critic1 = self.critic_target(batch.next_obs, act_target)
-            q_critic2 = self.critic2_target(batch.next_obs, act_target)
-            q_critic1[batch.done] = 0.0
-            q_critic2[batch.done] = 0.0
+            if self.step_counter % self.policy_delay == 0:
+                actor_loss = self._get_actor_loss(batch)
+                actor_loss = self.apply_losses([actor_loss], self.actor_optim)
+                self.actor_target.alpha_sync(self.tau_actor)
+            else:
+                actor_loss = th.tensor(np.nan)
 
-            q_cat = th.cat((q_critic1, q_critic2), dim=1)
-            min_ = th.min(q_cat, dim=1)
-            indices = min_.indices.unsqueeze(-1)
-            q_min = q_cat.gather(1, indices)
-
-            # Compute target with the minumim of both critics
-            y = (batch.reward + q_min * self.gamma ** self.n_steps).detach()
-
-            # Critic 1 training
-            q_target_1 = self.critic(batch.obs, batch.action)
-            td_error_1 = y - q_target_1
-            weighted_td_error_1 = th.mul(td_error_1, weights)
-            zero_tensor_1 = th.zeros_like(weighted_td_error_1)
-            critic_loss_1 = th.nn.functional.mse_loss(
-                weighted_td_error_1, zero_tensor_1
-            )
-            self.critic_optim.zero_grad()
-            critic_loss_1.backward()
-            self.critic_optim.step()
-
-            # Critic 2 training
-            q_target_2 = self.critic2(batch.obs, batch.action)
-            td_error_2 = y - q_target_2
-            weighted_td_error_2 = th.mul(td_error_2, weights)
-            zero_tensor_2 = th.zeros_like(weighted_td_error_2)
-            critic_loss_2 = th.nn.functional.mse_loss(
-                weighted_td_error_2, zero_tensor_2
-            )
-            self.critic2_optim.zero_grad()
-            critic_loss_2.backward()
-            self.critic2_optim.step()
-
+            # Update target networks
             self.critic_target.alpha_sync(self.tau_critic)
             self.critic2_target.alpha_sync(self.tau_critic)
 
-            # Training using TD3 original algorithm (use the critic 1 to
-            # calculate the loss of the actor) or use the indices of the
-            # minimum q values (new algorithm).
-            if self.training_type == 0:
-                # Use the q values of the critic 1
-                # indices = (indices * 0).detach()
-                indices = indices * 0
-            else:
-                # Use the indices of the min(critic1, critic2)
-                # indices = indices.detach()
-                pass
-
-            # Actor trainig
-            if self.step_counter % self.policy_delay == 0 or self.step_counter == 1:
-                actor_loss_1 = -self.critic(batch.obs, self.actor(batch.obs))
-                actor_loss_2 = -self.critic2(batch.obs, self.actor(batch.obs))
-                actor_loss = (
-                    th.cat((actor_loss_1, actor_loss_2), dim=1)
-                    .gather(1, indices)
-                    .mean()
-                )
-                self.actor_optim.zero_grad()
-                actor_loss.backward()
-                self.actor_optim.step()
-
-                self.actor_target.alpha_sync(self.tau_actor)
-            else:
-                actor_loss = th.tensor(self.actor_loss[-1])
-
-            # For prioritized exprience replay
-            # Update priorities of experiences with TD errors
-            if self.use_per:
-                error_np = (
-                    th.cat((weighted_td_error_1, weighted_td_error_2), dim=1)
-                    .gather(1, indices)
-                    .detach()
-                    .cpu()
-                    .numpy()
-                )
-                new_priorities = np.abs(error_np) + 1e-6
-                self.buffer.update_priorities(batch.indices, new_priorities)
-
             # Keep track of losses
-            self.critic_loss.append(critic_loss_1.detach().numpy())
-            self.critic2_loss.append(critic_loss_2.detach().numpy())
+            self.critic_loss.append(critic_loss.detach().numpy())
+            self.critic2_loss.append(critic2_loss.detach().numpy())
             self.actor_loss.append(actor_loss.detach().numpy())
+
+    # def _get_actor_loss(self, batch: PrioritizedExperienceTensorBatch) -> None:
+    #     if self.step_counter % self.policy_delay == 0:
+    #         return super()._get_actor_loss(batch)
+    #     else:
+    #         return th.tensor(np.nan)
+
+    # def _train_net(self, train_steps: int) -> None:
+    #     for _ in range(train_steps):
+    #         self.step_counter += 1
+    #         batch = self._prepare_batch()
+
+    #         # We do this since each weight will squared in MSE loss
+    #         weights = np.sqrt(batch.weights)
+
+    #         # Add noise to the actions
+    #         act_target = self.actor_target(batch.next_obs)
+    #         noise = th.rand_like(act_target) * 2 - 1  # Normal noise between [-1, 1]
+    #         act_target += noise * self.target_epsilon_noise
+    #         act_target = act_target.clamp(-1, 1)
+
+    #         # Critics training
+    #         q_critic1 = self.critic_target(batch.next_obs, act_target)
+    #         q_critic2 = self.critic2_target(batch.next_obs, act_target)
+    #         q_critic1[batch.done] = 0.0
+    #         q_critic2[batch.done] = 0.0
+
+    #         q_cat = th.cat((q_critic1, q_critic2), dim=1)
+    #         min_ = th.min(q_cat, dim=1)
+    #         indices = min_.indices.unsqueeze(-1)
+    #         q_min = q_cat.gather(1, indices)
+
+    #         # Compute target with the minumim of both critics
+    #         y = (batch.reward + q_min * self.gamma ** self.n_steps).detach()
+
+    #         # Critic 1 training
+    #         q_target_1 = self.critic(batch.obs, batch.action)
+    #         td_error_1 = y - q_target_1
+    #         weighted_td_error_1 = th.mul(td_error_1, weights)
+    #         zero_tensor_1 = th.zeros_like(weighted_td_error_1)
+    #         critic_loss_1 = th.nn.functional.mse_loss(
+    #             weighted_td_error_1, zero_tensor_1
+    #         )
+    #         self.critic_optim.zero_grad()
+    #         critic_loss_1.backward()
+    #         self.critic_optim.step()
+
+    #         # Critic 2 training
+    #         q_target_2 = self.critic2(batch.obs, batch.action)
+    #         td_error_2 = y - q_target_2
+    #         weighted_td_error_2 = th.mul(td_error_2, weights)
+    #         zero_tensor_2 = th.zeros_like(weighted_td_error_2)
+    #         critic_loss_2 = th.nn.functional.mse_loss(
+    #             weighted_td_error_2, zero_tensor_2
+    #         )
+    #         self.critic2_optim.zero_grad()
+    #         critic_loss_2.backward()
+    #         self.critic2_optim.step()
+
+    #         self.critic_target.alpha_sync(self.tau_critic)
+    #         self.critic2_target.alpha_sync(self.tau_critic)
+
+    #         # Training using TD3 original algorithm (use the critic 1 to
+    #         # calculate the loss of the actor) or use the indices of the
+    #         # minimum q values (new algorithm).
+    #         if self.training_type == 0:
+    #             # Use the q values of the critic 1
+    #             # indices = (indices * 0).detach()
+    #             indices = indices * 0
+    #         else:
+    #             # Use the indices of the min(critic1, critic2)
+    #             # indices = indices.detach()
+    #             pass
+
+    #         # Actor trainig
+    #         if self.step_counter % self.policy_delay == 0 or self.step_counter == 1:
+    #             actor_loss_1 = -self.critic(batch.obs, self.actor(batch.obs))
+    #             actor_loss_2 = -self.critic2(batch.obs, self.actor(batch.obs))
+    #             actor_loss = (
+    #                 th.cat((actor_loss_1, actor_loss_2), dim=1)
+    #                 .gather(1, indices)
+    #                 .mean()
+    #             )
+    #             self.actor_optim.zero_grad()
+    #             actor_loss.backward()
+    #             self.actor_optim.step()
+
+    #             self.actor_target.alpha_sync(self.tau_actor)
+    #         else:
+    #             actor_loss = th.tensor(self.actor_loss[-1])
+
+    #         # For prioritized exprience replay
+    #         # Update priorities of experiences with TD errors
+    #         if self.use_per:
+    #             error_np = (
+    #                 th.cat((weighted_td_error_1, weighted_td_error_2), dim=1)
+    #                 .gather(1, indices)
+    #                 .detach()
+    #                 .cpu()
+    #                 .numpy()
+    #             )
+    #             new_priorities = np.abs(error_np) + 1e-6
+    #             self.buffer.update_priorities(batch.indices, new_priorities)
+
+    #         # Keep track of losses
+    #         self.critic_loss.append(critic_loss_1.detach().numpy())
+    #         self.critic2_loss.append(critic_loss_2.detach().numpy())
+    #         self.actor_loss.append(actor_loss.detach().numpy())
 
     def save_plot_losses(self) -> None:
         super().save_plot_losses()
@@ -876,9 +1162,8 @@ class TD3Exp(TD3):
         warmup: int = 0,
         policy_delay: int = 2,
         target_action_epsilon_noise: float = 0.001,
-        training_type: int = 0,
         lambda_bc: float = 1.0,
-        q_filter: bool = False,
+        use_q_filter: bool = False,
     ):
         env_kwargs = src.utils.new_dic(env_kwargs)
         env_kwargs.setdefault("env_names", ["td3exp_train", "td3exp_test"])
@@ -905,11 +1190,10 @@ class TD3Exp(TD3):
             warmup=warmup,
             policy_delay=policy_delay,
             target_action_epsilon_noise=target_action_epsilon_noise,
-            training_type=training_type,
         )
 
         self.lambda_bc = lambda_bc
-        self.q_filter = q_filter
+        self.use_q_filter = use_q_filter
 
         self.bc_loss = []
         self.q_filter_num = []
@@ -919,21 +1203,103 @@ class TD3Exp(TD3):
             if not use_per
             else PrioritizedReplayBuffer(**demo_buffer_kwargs)
         )
-        self._fill_demo_buffer()
+
+        # Fill demo buffer
+        po_policy = PerturbObservePolicy(self.env.action_space)
+        expert_exp_source = ExperienceSource(
+            po_policy, self.env, self.gamma, self.n_steps
+        )
+        self.fill_buffer(
+            self.demo_buffer,
+            expert_exp_source,
+            num_experiences=-1,
+            description="Filling demo buffer",
+        )
 
         self.save_config_dic()
 
-    def _fill_demo_buffer(self) -> None:
-        # PO policy
-        po_policy = PerturbObservePolicy(self.env.action_space)
-        self.expert_exp_source = ExperienceSource(
-            po_policy, self.env, self.gamma, self.n_steps
-        )
+    def _train_nets(self, train_steps: int) -> None:
+        for _ in range(train_steps):
+            self.step_counter += 1
 
-        # Fill demo replay buffer
-        fill_steps = self.demo_buffer.capacity
-        for _ in tqdm(range(fill_steps), desc="Filling demo buffer"):
-            self.demo_buffer.append(self.expert_exp_source.play_n_steps())
+            batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
+            demo_batch = self.prepare_batch(
+                self.demo_buffer, self.batch_size, self.norm_rewards
+            )
+
+            critic_loss, critic2_loss = self._get_critic_loss(batch, self.buffer)
+            critic_loss_demo, critic2_loss_demo = self._get_critic_loss(
+                demo_batch, self.demo_buffer
+            )
+            critic_loss = self.apply_losses(
+                [critic_loss, critic_loss_demo], self.critic_optim
+            )
+            critic2_loss = self.apply_losses(
+                [critic2_loss, critic2_loss_demo], self.critic2_optim
+            )
+
+            actor_loss_bc = self._get_bc_loss(demo_batch)
+            if self.step_counter % self.policy_delay == 0:
+                actor_loss_rl = self._get_actor_loss(batch)
+                actor_loss_demo = self._get_actor_loss(demo_batch)
+                actor_loss = self.apply_losses(
+                    [actor_loss_rl, actor_loss_demo, actor_loss_bc], self.actor_optim
+                )
+                # print(actor_loss)
+
+                self.actor_target.alpha_sync(self.tau_actor)
+            else:
+                actor_loss = th.tensor(np.nan)
+
+            # print(actor_loss)
+
+            # Update target networks
+            self.critic_target.alpha_sync(self.tau_critic)
+            self.critic2_target.alpha_sync(self.tau_critic)
+
+            # Keep track of losses
+            self.critic_loss.append(critic_loss.detach().numpy())
+            self.critic2_loss.append(critic2_loss.detach().numpy())
+            self.actor_loss.append(actor_loss.detach().numpy())
+
+    def _get_bc_loss(self, demo_batch: ExperienceTensorBatch) -> th.Tensor:
+        agent_action = self.actor(demo_batch.obs)
+
+        if self.use_q_filter:
+            q1_expert = self.critic(demo_batch.obs, demo_batch.action)
+            q2_expert = self.critic2(demo_batch.obs, demo_batch.action)
+            q_expert = th.min(q1_expert, q2_expert)
+
+            q1_agent = self.critic(demo_batch.obs, agent_action)
+            q2_agent = self.critic2(demo_batch.obs, agent_action)
+            q_agent = th.min(q1_agent, q2_agent)
+            ind = (q_expert > q_agent).detach()
+            q_filter_num = sum(ind)
+        else:
+            ind = th.ones_like(agent_action, dtype=th.bool)
+            q_filter_num = 0
+
+        error = demo_batch.action[ind] - agent_action[ind]
+
+        demo_weights = np.sqrt(demo_batch.weights)
+        weighted_error = th.mul(error, demo_weights[ind])
+        zero_tensor = th.zeros_like(weighted_error)
+        bc_loss = th.nn.functional.mse_loss(weighted_error, zero_tensor)
+
+        # zero_tensor = th.zeros_like(error)
+        # bc_loss = th.nn.functional.mse_loss(error, zero_tensor)
+
+        bc_loss *= self.lambda_bc
+
+        # if th.isnan(bc_loss):
+        #     pass
+        # else:
+        #     self.update_priorities(self.demo_buffer, demo_batch.indices, weighted_error)
+
+        self.bc_loss.append(bc_loss.detach().cpu().numpy())
+        self.q_filter_num.append(q_filter_num)
+
+        return bc_loss
 
     def save_plot_losses(self) -> None:
         super().save_plot_losses()
@@ -945,160 +1311,73 @@ class TD3Exp(TD3):
         q_f.savefig(self.path.joinpath("q_filter_num.png"))
         plt.close(q_f)
 
-    def _train_net(self, train_steps: int) -> None:
-        for _ in range(train_steps):
-            self.step_counter += 1
-
-            batch = self._prepare_batch(self.buffer)
-
-            # We do this since each weight will squared in MSE loss
-            weights = np.sqrt(batch.weights)
-
-            # Add noise to the actions
-            act_target = self.actor_target(batch.next_obs)
-            noise = th.rand_like(act_target) * 2 - 1  # Normal noise between [-1, 1]
-            act_target += noise * self.target_epsilon_noise
-            act_target = act_target.clamp(-1, 1)
-
-            # Critics training
-            q_critic1 = self.critic_target(batch.next_obs, act_target)
-            q_critic2 = self.critic2_target(batch.next_obs, act_target)
-            q_critic1[batch.done] = 0.0
-            q_critic2[batch.done] = 0.0
-
-            q_cat = th.cat((q_critic1, q_critic2), dim=1)
-            min_ = th.min(q_cat, dim=1)
-            indices = min_.indices.unsqueeze(-1)
-            q_min = q_cat.gather(1, indices)
-
-            # Compute target with the minumim of both critics
-            y = (batch.reward + q_min * self.gamma ** self.n_steps).detach()
-
-            # Critic 1 training
-            q_target_1 = self.critic(batch.obs, batch.action)
-            td_error_1 = y - q_target_1
-            weighted_td_error_1 = th.mul(td_error_1, weights)
-            zero_tensor_1 = th.zeros_like(weighted_td_error_1)
-            critic_loss_1 = th.nn.functional.mse_loss(
-                weighted_td_error_1, zero_tensor_1
-            )
-            self.critic_optim.zero_grad()
-            critic_loss_1.backward()
-            self.critic_optim.step()
-
-            # Critic 2 training
-            q_target_2 = self.critic2(batch.obs, batch.action)
-            td_error_2 = y - q_target_2
-            weighted_td_error_2 = th.mul(td_error_2, weights)
-            zero_tensor_2 = th.zeros_like(weighted_td_error_2)
-            critic_loss_2 = th.nn.functional.mse_loss(
-                weighted_td_error_2, zero_tensor_2
-            )
-            self.critic2_optim.zero_grad()
-            critic_loss_2.backward()
-            self.critic2_optim.step()
-
-            self.critic_target.alpha_sync(self.tau_critic)
-            self.critic2_target.alpha_sync(self.tau_critic)
-
-            # Training using TD3 original algorithm (use the critic 1 to
-            # calculate the loss of the actor) or use the indices of the
-            # minimum q values (new algorithm).
-            if self.training_type == 0:
-                # Use the q values of the critic 1
-                indices = (indices * 0).detach()
-                # indices = indices * 0
-            else:
-                # Use the indices of the min(critic1, critic2)
-                indices = indices.detach()
-                # pass
-
-            # Actor trainig
-            if self.step_counter % self.policy_delay == 0 or self.step_counter == 1:
-                # BC Loss
-                demo_batch = self._prepare_batch(buffer=self.demo_buffer)
-                demo_weights = np.sqrt(demo_batch.weights)
-                agent_action = self.actor_target(demo_batch.obs)
-
-                if self.q_filter:
-                    q1_expert = self.critic_target(demo_batch.obs, demo_batch.action)
-                    q2_expert = self.critic2_target(demo_batch.obs, demo_batch.action)
-                    q_expert = th.min(q1_expert, q2_expert)
-
-                    q1_agent = self.critic_target(demo_batch.obs, agent_action)
-                    q2_agent = self.critic2_target(demo_batch.obs, agent_action)
-                    q_agent = th.min(q1_agent, q2_agent)
-
-                    ind = (q_expert > q_agent).detach()
-                    q_filter_num = sum(ind)
-
-                else:
-                    ind = th.ones_like(agent_action, dtype=th.bool)
-                    q_filter_num = 0
-
-                error = demo_batch.action[ind] - agent_action[ind]
-                print(demo_batch.action[ind])
-                print(agent_action[ind])
-                weighted_error = th.mul(error, demo_weights)
-                zero_tensor = th.zeros_like(weighted_error)
-                bc_loss = th.nn.functional.mse_loss(weighted_error, zero_tensor)
-                bc_loss *= self.lambda_bc
-                if th.isnan(bc_loss) or not self._pre_trained:
-                    bc_loss = th.tensor(0.0)
-                else:
-                    if self.use_per:
-                        error_demo = weighted_error.detach().cpu().numpy()
-                        new_priorities = np.abs(error_demo) + 1e-6
-                        print(demo_batch.indices[ind.squeeze(-1)])
-                        print(new_priorities)
-                        self.demo_buffer.update_priorities(
-                            demo_batch.indices[ind.squeeze(-1)], new_priorities
-                        )
-
-                # RL Loss
-                actor_loss_1 = -self.critic(batch.obs, self.actor(batch.obs))
-                actor_loss_2 = -self.critic2(batch.obs, self.actor(batch.obs))
-                actor_loss_rl = (
-                    th.cat((actor_loss_1, actor_loss_2), dim=1)
-                    .gather(1, indices)
-                    .mean()
-                )
-
-                actor_loss = actor_loss_rl + bc_loss
-
-                self.actor_optim.zero_grad()
-                actor_loss.backward()
-                self.actor_optim.step()
-
-                self.actor_target.alpha_sync(self.tau_actor)
-            else:
-                actor_loss = th.tensor(self.actor_loss[-1])
-                q_filter_num = self.q_filter_num[-1]
-                bc_loss = th.tensor(self.bc_loss[-1])
-
-            # For prioritized exprience replay
-            # Update priorities of experiences with TD errors
-            if self.use_per:
-                error_np = (
-                    th.cat((weighted_td_error_1, weighted_td_error_2), dim=1)
-                    .gather(1, indices)
-                    .detach()
-                    .cpu()
-                    .numpy()
-                )
-                new_priorities = np.abs(error_np) + 1e-6
-                self.buffer.update_priorities(batch.indices, new_priorities)
-
-            # Keep track of losses
-            self.critic_loss.append(critic_loss_1.detach().numpy())
-            self.critic2_loss.append(critic_loss_2.detach().numpy())
-            self.actor_loss.append(actor_loss.detach().numpy())
-            self.bc_loss.append(bc_loss.detach().numpy())
-            self.q_filter_num.append(q_filter_num)
-
 
 if __name__ == "__main__":
     pass
+
+    # dic_ddpgexp = {
+    #     "batch_size": 64,  # 64
+    #     "actor_lr": 1e-4,  # 1e-3
+    #     "critic_lr": 1e-3,
+    #     "tau_critic": 1e-3,  # 1e-3
+    #     "tau_actor": 1e-3,  # 1e-4
+    #     "actor_l2": 0,
+    #     "critic_l2": 0,
+    #     "gamma": 0.01,  # 0.6
+    #     "n_steps": 1,
+    #     "norm_rewards": 0,
+    #     "train_steps": 1,  # 5
+    #     "collect_steps": 1,
+    #     "prefill_buffer": 600,
+    #     "use_per": [False, True],  # True,
+    #     "warmup": 10_000,
+    #     "lambda_bc": [0.01, 0.2, 0.5, 0.7, 0.99],
+    #     "use_q_filter": True,
+    #     "buffer_kwargs": {
+    #         "capacity": 50_000,
+    #     },
+    #     "demo_buffer_kwargs": {
+    #         "capacity": 10_000,
+    #     },
+    #     "env_kwargs": {
+    #         "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
+    #     },
+    # }
+    # DDPGExp.run_from_grid(
+    #     dic_ddpgexp, total_timesteps=30_000, val_every_timesteps=1_000, repeat_run=1
+    # )
+
+    # dic_ddpg = {
+    #     "batch_size": 64,  # 64
+    #     "actor_lr": 1e-4,  # 1e-3
+    #     "critic_lr": 1e-3,
+    #     "tau_critic": 1e-4,  # 1e-3
+    #     "tau_actor": 1e-4,  # 1e-4
+    #     "actor_l2": 0,
+    #     "critic_l2": 0,
+    #     "gamma": 0.01,  # 0.6
+    #     "n_steps": 1,
+    #     "norm_rewards": 0,
+    #     "train_steps": 1,  # 5
+    #     "collect_steps": 1,
+    #     "prefill_buffer": 0,
+    #     "use_per": False,  # True,
+    #     "warmup": 1000,
+    #     "policy_kwargs": {
+    #         "noise": [GaussianNoise(mean=0.0, std=0.3)],
+    #         "schedule": [LinearSchedule(max_steps=10_000)],
+    #         "decrease_noise": True,
+    #     },
+    #     "buffer_kwargs": {
+    #         "capacity": 50_000,
+    #     },
+    #     "env_kwargs": {
+    #         "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
+    #     },
+    # }
+    # DDPG.run_from_grid(
+    #     dic_ddpg, total_timesteps=30_000, val_every_timesteps=1_000, repeat_run=1
+    # )
 
     # td3_dic = {
     #     "batch_size": 64,  # 64
@@ -1114,11 +1393,10 @@ if __name__ == "__main__":
     #     "train_steps": 1,  # 5
     #     "collect_steps": 1,
     #     "prefill_buffer": 1000,
-    #     "use_per": True,  # True,
+    #     "use_per": False,  # True,
     #     "warmup": 1000,
     #     "policy_delay": 2,
     #     "target_action_epsilon_noise": 0.001,
-    #     "training_type": 0,
     #     "policy_kwargs": {
     #         "noise": [GaussianNoise(mean=0.0, std=0.3)],
     #         "schedule": [LinearSchedule(max_steps=10_000)],
@@ -1146,33 +1424,18 @@ if __name__ == "__main__":
         "norm_rewards": 0,
         "train_steps": 1,  # 5
         "collect_steps": 1,
-        "prefill_buffer": 0,
-        # "use_per": [False, True],  # True,
-        "use_per": True,  # True,
-        "warmup": 0,
-        "policy_delay": 1,
+        "prefill_buffer": 600,
+        "use_per": False,  # True,
+        "warmup": 10_000,
+        "policy_delay": 2,
         "target_action_epsilon_noise": 0.001,
-        "training_type": 0,
-        # "q_filter": [False, True],
-        "q_filter": True,
+        "use_q_filter": True,
         "lambda_bc": 0.1,
-        # "lambda_bc": [0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99],
-        # "q_filter": True,
-        # "lambda_bc": 0.1,
-        # "policy_kwargs": {
-        #     "noise": [GaussianNoise(mean=0.0, std=0.3)],
-        #     "schedule": [LinearSchedule(max_steps=10_000)],
-        #     "decrease_noise": True,
-        # },
         "buffer_kwargs": {
             "capacity": 50_000,
-            # "alpha": 0.1,  # 0.9
-            # "beta": 1.0,  # 0.2
         },
         "demo_buffer_kwargs": {
-            "capacity": 1_000,
-            # "alpha": 0.1,  # 0.9
-            # "beta": 1.0,  # 0.2
+            "capacity": 10_000,
         },
         "env_kwargs": {
             "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
