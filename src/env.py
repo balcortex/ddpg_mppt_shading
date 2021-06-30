@@ -331,7 +331,7 @@ class ShadedPVEnv(CustomEnv):
         ax = df.plot(y=list(states))
         fig = ax.get_figure()
         fig.savefig(self.path.joinpath(f"{self.time}_{name}.png"))
-        plt.close()
+        plt.close(fig)
 
     def quit(self) -> None:
         """"Save the dataframe and exit the MATLAB engine"""

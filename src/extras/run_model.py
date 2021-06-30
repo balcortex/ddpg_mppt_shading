@@ -4,7 +4,7 @@ from src.model import DDPG, DDPGExp, TD3, TD3Exp
 
 TOTAL_TIMESTEPS = 30_000
 VAL_EVERY_TIMESTEPS = 1_000
-REPEAT_RUN = 10
+REPEAT_RUN = 5
 
 COMMON_KWARGS = {
     "batch_size": 64,  # 64
@@ -17,7 +17,7 @@ COMMON_KWARGS = {
     "gamma": 0.01,  # 0.6
     "n_steps": 1,
     "norm_rewards": 0,
-    "train_steps": 5,  # 5
+    "train_steps": 3,  # 5
     "collect_steps": 0,
     "prefill_buffer": 600,
     "use_per": False,
@@ -85,7 +85,7 @@ def run_td3exp():
 
 
 if __name__ == "__main__":
-    run_ddpg()
+    # run_ddpg()
     run_ddpgexp()
     run_td3()
-    run_td3exp()
+    # run_td3exp()
