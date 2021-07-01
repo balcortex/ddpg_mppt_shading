@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import numbers
-import sys
+from pathlib import Path
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import gym
 import matplotlib
@@ -13,7 +13,6 @@ import numpy as np
 import torch as th
 from torch.optim import Adam
 from tqdm import tqdm
-import stable_baselines3 as sb3
 
 import src.policy
 import src.utils
@@ -23,14 +22,11 @@ from src.experience import (
     Experience,
     ExperienceSource,
     ExperienceTensorBatch,
-    PrioritizedExperienceBatch,
     PrioritizedExperienceTensorBatch,
     PrioritizedReplayBuffer,
     ReplayBuffer,
 )
-from src.noise import GaussianNoise
-from src.policy import PerturbObservePolicy, Policy, RandomPolicy, SB3Policy
-from src.schedule import ConstantSchedule, LinearSchedule
+from src.policy import PerturbObservePolicy, Policy, RandomPolicy
 
 
 class Model(ABC):
@@ -48,6 +44,8 @@ class Model(ABC):
         self.policy = self.get_policy(policy_name, self.env, policy_kwargs)
         self.exp_source = ExperienceSource(self.policy, self.env, **exp_source_kwargs)
 
+        self._env_steps = 0
+
     @abstractmethod
     def learn(self) -> None:
         """Run the learning process"""
@@ -59,7 +57,20 @@ class Model(ABC):
         self.env.quit()
 
     def play_episode(self) -> Sequence[Experience]:
-        return self.exp_source.play_episode()
+        episode = self.exp_source.play_episode()
+        self._env_steps += len(episode) * self.exp_source.n_steps
+        return episode
+
+    def collect_step(self) -> Experience:
+        self._env_steps += self.exp_source.n_steps
+        return self.exp_source.play_n_steps()
+
+    def save_log(self) -> Path:
+        path = self.path.joinpath("log.txt")
+        with open(path, "w") as f:
+            f.write(f"Environment steps: {self._env_steps}\n")
+
+        return path
 
     def save_config_dic(self) -> None:
         config_path = self.path.joinpath("config.json")
@@ -82,7 +93,7 @@ class Model(ABC):
         return dic
 
     @property
-    def path(self) -> str:
+    def path(self) -> Path:
         return self.env.path
 
     @classmethod
@@ -98,6 +109,7 @@ class Model(ABC):
             model = cls(**dic, **kwargs)
             for _ in tqdm(range(episodes), desc="Playing episodes"):
                 model.play_episode()
+            model.save_log()
             model.quit()
 
     @staticmethod
@@ -208,6 +220,8 @@ class TrainableModel(Model):
             exp_source_kwargs=exp_source_kwargs,
         )
 
+        self._train_steps = 0
+
     @abstractmethod
     def learn(self) -> None:
         """Run the learning process"""
@@ -229,10 +243,16 @@ class TrainableModel(Model):
             self.learn(val_every_timesteps)
             for ep in range(n_eval_episodes):
                 self.play_test_episode()
+            self.save_log()
             self.save_plot_losses()
 
     def play_test_episode(self) -> None:
         self.agent_exp_source.play_episode()
+
+    def save_log(self) -> None:
+        path = super().save_log()
+        with open(path, "a") as f:
+            f.write(f"Train steps: {self._train_steps}\n")
 
     @property
     def collect_exp_source(self) -> ExperienceSource:
@@ -271,189 +291,6 @@ class TrainableModel(Model):
                 model = cls(**dic, **kwargs)
                 model.run(total_timesteps, val_every_timesteps)
                 model.quit()
-
-
-class SB3Model(TrainableModel):
-    def __init__(
-        self,
-        model_name: str,
-        model_kwargs: Optional[Dict[Any, Any]],
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        **kwargs,
-    ):
-        self._model_name = model_name.lower()
-
-        model_kwargs = model_kwargs or {}
-
-        env_kwargs = src.utils.new_dic(env_kwargs)
-        env_kwargs.setdefault(
-            "env_names",
-            [f"sb3_{self._model_name}_train", f"sb3_{self._model_name}_test"],
-        )
-        self.env, self.test_env = ShadedPVEnv.get_envs(**env_kwargs)
-
-        model = getattr(sb3, self._model_name.upper())
-        self.model = model(
-            policy="MlpPolicy",
-            env=self.env,
-            device="cpu",
-            **model_kwargs,
-            **kwargs,
-        )
-
-        self.policy = SB3Policy(self.model)
-        self.exp_source = ExperienceSource(
-            self.policy, self.env, gamma=model_kwargs["gamma"]
-        )
-
-        self.test_policy = SB3Policy(self.model, deterministic=True)
-        self.agent_exp_source = ExperienceSource(
-            self.policy, self.test_env, gamma=model_kwargs["gamma"]
-        )
-
-        self.save_config_dic()
-
-    def run(
-        self,
-        total_timesteps: int,
-        val_every_timesteps: int = -1,
-        n_eval_episodes: int = 1,
-    ):
-        self.learn(total_timesteps, val_every_timesteps, n_eval_episodes)
-
-    def learn(
-        self,
-        timesteps: int,
-        val_every_timesteps: int = -1,
-        n_eval_episodes: int = 1,
-    ):
-        self.model = self.model.learn(
-            total_timesteps=timesteps,
-            log_interval=1,
-            reset_num_timesteps=False,
-            eval_env=self.test_env,
-            n_eval_episodes=n_eval_episodes,
-            eval_freq=val_every_timesteps,
-        )
-
-    def save_plot_losses(self) -> None:
-        pass
-
-
-class SB3DDPG(SB3Model):
-    def __init__(
-        self,
-        lr: float = 1e-3,
-        gamma: float = 0.1,
-        verbose: int = 1,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        **kwargs,
-    ):
-
-        model_kwargs = {
-            "learning_rate": lr,
-            "gamma": gamma,
-            "verbose": verbose,
-        }
-
-        super().__init__(
-            "ddpg",
-            model_kwargs=model_kwargs,
-            env_kwargs=env_kwargs,
-            **kwargs,
-        )
-
-
-class SB3TD3(SB3Model):
-    def __init__(
-        self,
-        lr: float = 1e-3,
-        gamma: float = 0.1,
-        verbose: int = 1,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        **kwargs,
-    ):
-        model_kwargs = {
-            "learning_rate": lr,
-            "gamma": gamma,
-            "verbose": verbose,
-        }
-
-        super().__init__(
-            "td3",
-            model_kwargs,
-            env_kwargs=env_kwargs,
-            **kwargs,
-        )
-
-
-class SB3A2C(SB3Model):
-    def __init__(
-        self,
-        lr: float = 1e-3,
-        gamma: float = 0.1,
-        verbose: int = 1,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        **kwargs,
-    ):
-        model_kwargs = {
-            "learning_rate": lr,
-            "gamma": gamma,
-            "verbose": verbose,
-        }
-
-        super().__init__(
-            "a2c",
-            model_kwargs,
-            env_kwargs=env_kwargs,
-            **kwargs,
-        )
-
-
-class SB3SAC(SB3Model):
-    def __init__(
-        self,
-        lr: float = 1e-3,
-        gamma: float = 0.1,
-        verbose: int = 1,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        **kwargs,
-    ):
-        model_kwargs = {
-            "learning_rate": lr,
-            "gamma": gamma,
-            "verbose": verbose,
-        }
-
-        super().__init__(
-            "sac",
-            model_kwargs,
-            env_kwargs=env_kwargs,
-            **kwargs,
-        )
-
-
-class SB3PPO(SB3Model):
-    def __init__(
-        self,
-        lr: float = 1e-3,
-        gamma: float = 0.1,
-        verbose: int = 1,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        **kwargs,
-    ):
-        model_kwargs = {
-            "learning_rate": lr,
-            "gamma": gamma,
-            "verbose": verbose,
-        }
-
-        super().__init__(
-            "ppo",
-            model_kwargs,
-            env_kwargs=env_kwargs,
-            **kwargs,
-        )
 
 
 class DDPG(TrainableModel):
@@ -531,7 +368,7 @@ class DDPG(TrainableModel):
             exp_source_kwargs={"gamma": gamma, "n_steps": n_steps},
         )
 
-        self.step_counter = 0
+        # self.step_counter = 0
         self.actor_loss = []
         self.critic_loss = []
 
@@ -542,16 +379,21 @@ class DDPG(TrainableModel):
         )
         # if warmup:
         #     prefill_buffer = prefill_buffer or batch_size
-        self.fill_buffer(
+        self._env_steps += self.fill_buffer(
             self.buffer,
             explore_exp_source,
             num_experiences=prefill_buffer,
             description="Filling buffer with random experiences",
         )
+        self._update_losses(losses={}, repeat=prefill_buffer)
 
         self._pre_trained = False
 
         self.save_config_dic()
+
+    @property
+    def _loss_names(self) -> Sequence[str]:
+        return ["actor_loss", "critic_loss"]
 
     def learn(
         self,
@@ -563,11 +405,30 @@ class DDPG(TrainableModel):
             self._pre_trained = True
 
         for i in tqdm(range(1, epochs + 1), desc="Training"):
-            self._train_nets(self.train_steps)
-            # Collect steps using the trained policy
-            self.fill_buffer(self.buffer, self.collect_exp_source, num_experiences=1)
+            losses = self._train_nets(self.train_steps)
 
-    def plot_loss(self, loss: str, log: bool = False) -> matplotlib.figure.Figure:
+            # Collect steps using the trained policy
+            self._env_steps += self.fill_buffer(
+                self.buffer, self.collect_exp_source, num_experiences=1
+            )
+
+            # Update losses tracking
+            self._update_losses(losses)
+
+    def _update_losses(
+        self, losses: Optional[Dict[str, numbers.Real]] = None, repeat: int = 1
+    ) -> None:
+        if not losses:
+            for _ in range(repeat):
+                for l in self._loss_names:
+                    getattr(self, l).append(np.nan)
+            return None
+
+        for loss, value in losses.items():
+            for _ in range(repeat):
+                getattr(self, loss).append(value)
+
+    def plot_loss(self, loss: str, log_y: bool = False) -> matplotlib.figure.Figure:
         """
         loss: 'critic_loss' or 'actor_loss'
         """
@@ -575,22 +436,25 @@ class DDPG(TrainableModel):
         fig = plt.figure()
         ax = fig.add_subplot(111)
 
-        x = np.arange(self.step_counter)
+        x = np.arange(self._env_steps)
         y = np.array(getattr(self, loss))
         mask = np.isfinite(y)
 
         ax.plot(x[mask], y[mask])
-        ax.set_xlabel("Epoch")
+        ax.set_xlabel("Environment steps")
         ax.set_ylabel(loss)
 
-        if log:
+        if log_y:
             ax.set_yscale("log")
 
         return fig
 
+    # def save_loss(self, loss: str) -> None:
+    #     path = self.path.joinpath(f'{loss}.csv')
+
     def save_plot_losses(self) -> None:
         fig_actor_loss = self.plot_loss("actor_loss")
-        fig_critic_loss = self.plot_loss("critic_loss", log=True)
+        fig_critic_loss = self.plot_loss("critic_loss", log_y=True)
 
         fig_actor_loss.savefig(self.path.joinpath("actor_loss.png"))
         fig_critic_loss.savefig(self.path.joinpath("critic_loss.png"))
@@ -598,9 +462,9 @@ class DDPG(TrainableModel):
         plt.close(fig_actor_loss)
         plt.close(fig_critic_loss)
 
-    def _train_nets(self, train_steps: int) -> None:
+    def _train_nets(self, train_steps: int) -> Dict[str, numbers.Real]:
         for _ in range(train_steps):
-            self.step_counter += 1
+            self._train_steps += 1
 
             batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
 
@@ -615,8 +479,12 @@ class DDPG(TrainableModel):
             self.actor_target.alpha_sync(self.tau_actor)
 
             # Keep track of losses
-            self.critic_loss.append(critic_loss.detach().numpy())
-            self.actor_loss.append(actor_loss.detach().numpy())
+            # self.critic_loss.append(critic_loss.detach().numpy())
+            # self.actor_loss.append(actor_loss.detach().numpy())
+            return {
+                "critic_loss": critic_loss.detach().numpy(),
+                "actor_loss": actor_loss.detach().numpy(),
+            }
 
     def _get_critic_loss(
         self, batch: ExperienceTensorBatch, buffer: ReplayBuffer
@@ -711,7 +579,7 @@ class DDPG(TrainableModel):
         exp_source: ExperienceSource,
         num_experiences: Optional[int] = None,
         description: Optional[str] = None,
-    ):
+    ) -> int:
         if num_experiences == -1:
             num_experiences = buffer.capacity
 
@@ -720,6 +588,8 @@ class DDPG(TrainableModel):
         ):
             exp = exp_source.play_n_steps()
             buffer.append(exp)
+
+        return num_experiences
 
     @staticmethod
     def update_priorities(
@@ -764,6 +634,12 @@ class DDPGExp(DDPG):
         env_kwargs = src.utils.new_dic(env_kwargs)
         env_kwargs.setdefault("env_names", ["ddpgexp_train", "ddpgexp_test"])
 
+        self.lambda_bc = lambda_bc
+        self.use_q_filter = use_q_filter
+
+        self.bc_loss = []
+        self.q_filter_num = []
+
         super().__init__(
             env_kwargs=env_kwargs,
             policy_kwargs=policy_kwargs,
@@ -786,12 +662,6 @@ class DDPGExp(DDPG):
             warmup=warmup,
         )
 
-        self.lambda_bc = lambda_bc
-        self.use_q_filter = use_q_filter
-
-        self.bc_loss = []
-        self.q_filter_num = []
-
         self.demo_buffer = (
             ReplayBuffer(**demo_buffer_kwargs)
             if not use_per
@@ -803,18 +673,24 @@ class DDPGExp(DDPG):
         expert_exp_source = ExperienceSource(
             po_policy, self.env, self.gamma, self.n_steps
         )
-        self.fill_buffer(
+        demo_experiences = self.fill_buffer(
             self.demo_buffer,
             expert_exp_source,
             num_experiences=-1,
             description="Filling demo buffer",
         )
+        self._env_steps += demo_experiences
+        self._update_losses(losses={}, repeat=demo_experiences)
 
         self.save_config_dic()
 
-    def _train_nets(self, train_steps: int) -> None:
+    @property
+    def _loss_names(self) -> Sequence[str]:
+        return super()._loss_names + ["bc_loss", "q_filter_num"]
+
+    def _train_nets(self, train_steps: int) -> Dict[str, numbers.Real]:
         for _ in range(train_steps):
-            self.step_counter += 1
+            self._train_steps += 1
 
             batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
             demo_batch = self.prepare_batch(
@@ -829,7 +705,7 @@ class DDPGExp(DDPG):
 
             actor_loss_rl = self._get_actor_loss(batch)
             actor_loss_demo = self._get_actor_loss(demo_batch)
-            actor_loss_bc = self._get_bc_loss(demo_batch)
+            actor_loss_bc, q_filter_num = self._get_bc_loss(demo_batch)
             actor_loss = self.apply_losses(
                 [actor_loss_rl, actor_loss_demo, actor_loss_bc], self.actor_optim
             )
@@ -838,11 +714,16 @@ class DDPGExp(DDPG):
             self.critic_target.alpha_sync(self.tau_critic)
             self.actor_target.alpha_sync(self.tau_actor)
 
-            # Keep track of losses
-            self.critic_loss.append(critic_loss.detach().numpy())
-            self.actor_loss.append(actor_loss.detach().numpy())
+            return {
+                "critic_loss": critic_loss.detach().numpy(),
+                "actor_loss": actor_loss.detach().numpy(),
+                "bc_loss": actor_loss_bc.detach().numpy(),
+                "q_filter_num": q_filter_num,
+            }
 
-    def _get_bc_loss(self, demo_batch: ExperienceTensorBatch) -> th.Tensor:
+    def _get_bc_loss(
+        self, demo_batch: ExperienceTensorBatch
+    ) -> Tuple[th.Tensor, numbers.Real]:
         agent_action = self.actor(demo_batch.obs)
 
         if self.use_q_filter:
@@ -860,25 +741,13 @@ class DDPGExp(DDPG):
         weighted_error = th.mul(error, demo_weights[ind])
         zero_tensor = th.zeros_like(weighted_error)
         bc_loss = th.nn.functional.mse_loss(weighted_error, zero_tensor)
-
-        # zero_tensor = th.zeros_like(error)
-        # bc_loss = th.nn.functional.mse_loss(error, zero_tensor)
-
         bc_loss *= self.lambda_bc
 
-        # if th.isnan(bc_loss):
-        #     pass
-        # else:
-        #     self.update_priorities(self.demo_buffer, demo_batch.indices, weighted_error)
-
-        self.bc_loss.append(bc_loss.detach().cpu().numpy())
-        self.q_filter_num.append(q_filter_num)
-
-        return bc_loss
+        return bc_loss, q_filter_num
 
     def save_plot_losses(self) -> None:
         super().save_plot_losses()
-        bc_loss = self.plot_loss("bc_loss", log=True)
+        bc_loss = self.plot_loss("bc_loss", log_y=True)
         bc_loss.savefig(self.path.joinpath("bc_loss.png"))
         plt.close(bc_loss)
 
@@ -915,6 +784,11 @@ class TD3(DDPG):
         env_kwargs = env_kwargs or {}
         env_kwargs.setdefault("env_names", ["td3_train", "td3_test"])
 
+        self.policy_delay = policy_delay
+        self.target_epsilon_noise = target_action_epsilon_noise
+
+        self.critic2_loss = []
+
         super().__init__(
             env_kwargs=env_kwargs,
             policy_kwargs=policy_kwargs,
@@ -937,10 +811,6 @@ class TD3(DDPG):
             warmup=warmup,
         )
 
-        self.policy_delay = policy_delay
-        self.target_epsilon_noise = target_action_epsilon_noise
-
-        self.critic2_loss = []
         self.critic2 = rl.create_mlp_critic(self.env, weight_init_fn=None)
         self.critic2_optim = Adam(
             self.critic2.parameters(),
@@ -951,6 +821,10 @@ class TD3(DDPG):
         self.critic2_target.sync()
 
         self.save_config_dic()
+
+    @property
+    def _loss_names(self) -> Sequence[str]:
+        return super()._loss_names + ["critic2_loss"]
 
     def _get_critic_loss(
         self, batch: ExperienceTensorBatch, buffer: ReplayBuffer
@@ -996,9 +870,9 @@ class TD3(DDPG):
 
         return critic_loss_1, critic_loss_2
 
-    def _train_nets(self, train_steps: int) -> None:
+    def _train_nets(self, train_steps: int) -> Dict[str, numbers.Real]:
         for _ in range(train_steps):
-            self.step_counter += 1
+            self._train_steps += 1
 
             batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
 
@@ -1006,7 +880,7 @@ class TD3(DDPG):
             critic_loss = self.apply_losses([critic_loss], self.critic_optim)
             critic2_loss = self.apply_losses([critic2_loss], self.critic2_optim)
 
-            if self.step_counter % self.policy_delay == 0:
+            if self._train_steps % self.policy_delay == 0:
                 actor_loss = self._get_actor_loss(batch)
                 actor_loss = self.apply_losses([actor_loss], self.actor_optim)
                 self.actor_target.alpha_sync(self.tau_actor)
@@ -1017,122 +891,15 @@ class TD3(DDPG):
             self.critic_target.alpha_sync(self.tau_critic)
             self.critic2_target.alpha_sync(self.tau_critic)
 
-            # Keep track of losses
-            self.critic_loss.append(critic_loss.detach().numpy())
-            self.critic2_loss.append(critic2_loss.detach().numpy())
-            self.actor_loss.append(actor_loss.detach().numpy())
-
-    # def _get_actor_loss(self, batch: PrioritizedExperienceTensorBatch) -> None:
-    #     if self.step_counter % self.policy_delay == 0:
-    #         return super()._get_actor_loss(batch)
-    #     else:
-    #         return th.tensor(np.nan)
-
-    # def _train_net(self, train_steps: int) -> None:
-    #     for _ in range(train_steps):
-    #         self.step_counter += 1
-    #         batch = self._prepare_batch()
-
-    #         # We do this since each weight will squared in MSE loss
-    #         weights = np.sqrt(batch.weights)
-
-    #         # Add noise to the actions
-    #         act_target = self.actor_target(batch.next_obs)
-    #         noise = th.rand_like(act_target) * 2 - 1  # Normal noise between [-1, 1]
-    #         act_target += noise * self.target_epsilon_noise
-    #         act_target = act_target.clamp(-1, 1)
-
-    #         # Critics training
-    #         q_critic1 = self.critic_target(batch.next_obs, act_target)
-    #         q_critic2 = self.critic2_target(batch.next_obs, act_target)
-    #         q_critic1[batch.done] = 0.0
-    #         q_critic2[batch.done] = 0.0
-
-    #         q_cat = th.cat((q_critic1, q_critic2), dim=1)
-    #         min_ = th.min(q_cat, dim=1)
-    #         indices = min_.indices.unsqueeze(-1)
-    #         q_min = q_cat.gather(1, indices)
-
-    #         # Compute target with the minumim of both critics
-    #         y = (batch.reward + q_min * self.gamma ** self.n_steps).detach()
-
-    #         # Critic 1 training
-    #         q_target_1 = self.critic(batch.obs, batch.action)
-    #         td_error_1 = y - q_target_1
-    #         weighted_td_error_1 = th.mul(td_error_1, weights)
-    #         zero_tensor_1 = th.zeros_like(weighted_td_error_1)
-    #         critic_loss_1 = th.nn.functional.mse_loss(
-    #             weighted_td_error_1, zero_tensor_1
-    #         )
-    #         self.critic_optim.zero_grad()
-    #         critic_loss_1.backward()
-    #         self.critic_optim.step()
-
-    #         # Critic 2 training
-    #         q_target_2 = self.critic2(batch.obs, batch.action)
-    #         td_error_2 = y - q_target_2
-    #         weighted_td_error_2 = th.mul(td_error_2, weights)
-    #         zero_tensor_2 = th.zeros_like(weighted_td_error_2)
-    #         critic_loss_2 = th.nn.functional.mse_loss(
-    #             weighted_td_error_2, zero_tensor_2
-    #         )
-    #         self.critic2_optim.zero_grad()
-    #         critic_loss_2.backward()
-    #         self.critic2_optim.step()
-
-    #         self.critic_target.alpha_sync(self.tau_critic)
-    #         self.critic2_target.alpha_sync(self.tau_critic)
-
-    #         # Training using TD3 original algorithm (use the critic 1 to
-    #         # calculate the loss of the actor) or use the indices of the
-    #         # minimum q values (new algorithm).
-    #         if self.training_type == 0:
-    #             # Use the q values of the critic 1
-    #             # indices = (indices * 0).detach()
-    #             indices = indices * 0
-    #         else:
-    #             # Use the indices of the min(critic1, critic2)
-    #             # indices = indices.detach()
-    #             pass
-
-    #         # Actor trainig
-    #         if self.step_counter % self.policy_delay == 0 or self.step_counter == 1:
-    #             actor_loss_1 = -self.critic(batch.obs, self.actor(batch.obs))
-    #             actor_loss_2 = -self.critic2(batch.obs, self.actor(batch.obs))
-    #             actor_loss = (
-    #                 th.cat((actor_loss_1, actor_loss_2), dim=1)
-    #                 .gather(1, indices)
-    #                 .mean()
-    #             )
-    #             self.actor_optim.zero_grad()
-    #             actor_loss.backward()
-    #             self.actor_optim.step()
-
-    #             self.actor_target.alpha_sync(self.tau_actor)
-    #         else:
-    #             actor_loss = th.tensor(self.actor_loss[-1])
-
-    #         # For prioritized exprience replay
-    #         # Update priorities of experiences with TD errors
-    #         if self.use_per:
-    #             error_np = (
-    #                 th.cat((weighted_td_error_1, weighted_td_error_2), dim=1)
-    #                 .gather(1, indices)
-    #                 .detach()
-    #                 .cpu()
-    #                 .numpy()
-    #             )
-    #             new_priorities = np.abs(error_np) + 1e-6
-    #             self.buffer.update_priorities(batch.indices, new_priorities)
-
-    #         # Keep track of losses
-    #         self.critic_loss.append(critic_loss_1.detach().numpy())
-    #         self.critic2_loss.append(critic_loss_2.detach().numpy())
-    #         self.actor_loss.append(actor_loss.detach().numpy())
+            return {
+                "critic_loss": critic_loss.detach().numpy(),
+                "critic2_loss": critic2_loss.detach().numpy(),
+                "actor_loss": actor_loss.detach().numpy(),
+            }
 
     def save_plot_losses(self) -> None:
         super().save_plot_losses()
-        fig_critic_loss = self.plot_loss("critic2_loss", log=True)
+        fig_critic_loss = self.plot_loss("critic2_loss", log_y=True)
         fig_critic_loss.savefig(self.path.joinpath("critic2_loss.png"))
         plt.close(fig_critic_loss)
 
@@ -1168,6 +935,18 @@ class TD3Exp(TD3):
         env_kwargs = src.utils.new_dic(env_kwargs)
         env_kwargs.setdefault("env_names", ["td3exp_train", "td3exp_test"])
 
+        self.lambda_bc = lambda_bc
+        self.use_q_filter = use_q_filter
+
+        self.bc_loss = []
+        self.q_filter_num = []
+
+        self.demo_buffer = (
+            ReplayBuffer(**demo_buffer_kwargs)
+            if not use_per
+            else PrioritizedReplayBuffer(**demo_buffer_kwargs)
+        )
+
         super().__init__(
             env_kwargs=env_kwargs,
             policy_kwargs=policy_kwargs,
@@ -1192,35 +971,29 @@ class TD3Exp(TD3):
             target_action_epsilon_noise=target_action_epsilon_noise,
         )
 
-        self.lambda_bc = lambda_bc
-        self.use_q_filter = use_q_filter
-
-        self.bc_loss = []
-        self.q_filter_num = []
-
-        self.demo_buffer = (
-            ReplayBuffer(**demo_buffer_kwargs)
-            if not use_per
-            else PrioritizedReplayBuffer(**demo_buffer_kwargs)
-        )
-
         # Fill demo buffer
         po_policy = PerturbObservePolicy(self.env.action_space)
         expert_exp_source = ExperienceSource(
             po_policy, self.env, self.gamma, self.n_steps
         )
-        self.fill_buffer(
+        demo_experiences = self.fill_buffer(
             self.demo_buffer,
             expert_exp_source,
             num_experiences=-1,
             description="Filling demo buffer",
         )
+        self._env_steps += demo_experiences
+        self._update_losses(losses={}, repeat=demo_experiences)
 
         self.save_config_dic()
 
-    def _train_nets(self, train_steps: int) -> None:
+    @property
+    def _loss_names(self) -> Sequence[str]:
+        return super()._loss_names + ["bc_loss", "q_filter_num"]
+
+    def _train_nets(self, train_steps: int) -> Dict[str, numbers.Real]:
         for _ in range(train_steps):
-            self.step_counter += 1
+            self._train_steps += 1
 
             batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
             demo_batch = self.prepare_batch(
@@ -1238,31 +1011,33 @@ class TD3Exp(TD3):
                 [critic2_loss, critic2_loss_demo], self.critic2_optim
             )
 
-            actor_loss_bc = self._get_bc_loss(demo_batch)
-            if self.step_counter % self.policy_delay == 0:
+            actor_loss_bc, q_filter_num = self._get_bc_loss(demo_batch)
+            if self._train_steps % self.policy_delay == 0:
                 actor_loss_rl = self._get_actor_loss(batch)
                 actor_loss_demo = self._get_actor_loss(demo_batch)
                 actor_loss = self.apply_losses(
                     [actor_loss_rl, actor_loss_demo, actor_loss_bc], self.actor_optim
                 )
-                # print(actor_loss)
 
                 self.actor_target.alpha_sync(self.tau_actor)
             else:
                 actor_loss = th.tensor(np.nan)
 
-            # print(actor_loss)
-
             # Update target networks
             self.critic_target.alpha_sync(self.tau_critic)
             self.critic2_target.alpha_sync(self.tau_critic)
 
-            # Keep track of losses
-            self.critic_loss.append(critic_loss.detach().numpy())
-            self.critic2_loss.append(critic2_loss.detach().numpy())
-            self.actor_loss.append(actor_loss.detach().numpy())
+            return {
+                "critic_loss": critic_loss.detach().numpy(),
+                "critic2_loss": critic2_loss.detach().numpy(),
+                "actor_loss": actor_loss.detach().numpy(),
+                "bc_loss": actor_loss_bc.detach().numpy(),
+                "q_filter_num": q_filter_num,
+            }
 
-    def _get_bc_loss(self, demo_batch: ExperienceTensorBatch) -> th.Tensor:
+    def _get_bc_loss(
+        self, demo_batch: ExperienceTensorBatch
+    ) -> Tuple[th.Tensor, numbers.Real]:
         agent_action = self.actor(demo_batch.obs)
 
         if self.use_q_filter:
@@ -1285,25 +1060,13 @@ class TD3Exp(TD3):
         weighted_error = th.mul(error, demo_weights[ind])
         zero_tensor = th.zeros_like(weighted_error)
         bc_loss = th.nn.functional.mse_loss(weighted_error, zero_tensor)
-
-        # zero_tensor = th.zeros_like(error)
-        # bc_loss = th.nn.functional.mse_loss(error, zero_tensor)
-
         bc_loss *= self.lambda_bc
 
-        # if th.isnan(bc_loss):
-        #     pass
-        # else:
-        #     self.update_priorities(self.demo_buffer, demo_batch.indices, weighted_error)
-
-        self.bc_loss.append(bc_loss.detach().cpu().numpy())
-        self.q_filter_num.append(q_filter_num)
-
-        return bc_loss
+        return bc_loss, q_filter_num
 
     def save_plot_losses(self) -> None:
         super().save_plot_losses()
-        bc_loss = self.plot_loss("bc_loss", log=True)
+        bc_loss = self.plot_loss("bc_loss", log_y=True)
         bc_loss.savefig(self.path.joinpath("bc_loss.png"))
         plt.close(bc_loss)
 

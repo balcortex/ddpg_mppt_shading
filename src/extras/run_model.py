@@ -2,9 +2,10 @@ from src.noise import GaussianNoise
 from src.schedule import LinearSchedule
 from src.model import DDPG, DDPGExp, TD3, TD3Exp
 
+# TOTAL_TIMESTEPS = 30_000
 TOTAL_TIMESTEPS = 30_000
 VAL_EVERY_TIMESTEPS = 1_000
-REPEAT_RUN = 5
+REPEAT_RUN = 1
 
 COMMON_KWARGS = {
     "batch_size": 64,  # 64
@@ -17,11 +18,13 @@ COMMON_KWARGS = {
     "gamma": 0.01,  # 0.6
     "n_steps": 1,
     "norm_rewards": 0,
-    "train_steps": 3,  # 5
+    "train_steps": 1,  # 5
+    # "train_steps": 1,  # 5
     "collect_steps": 0,
-    "prefill_buffer": 600,
+    "prefill_buffer": 700,
     "use_per": False,
-    "warmup": 10_000,
+    "warmup": 100,
+    # "warmup": 10_000,
     "policy_delay": 2,
     "target_action_epsilon_noise": 0.001,
     "use_q_filter": False,
@@ -35,7 +38,8 @@ COMMON_KWARGS = {
         "capacity": 50_000,
     },
     "demo_buffer_kwargs": {
-        "capacity": 10_000,
+        # "capacity": 10_000,
+        "capacity": 900,
     },
     "env_kwargs": {
         "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
@@ -86,6 +90,6 @@ def run_td3exp():
 
 if __name__ == "__main__":
     # run_ddpg()
-    run_ddpgexp()
-    run_td3()
-    # run_td3exp()
+    # run_ddpgexp()
+    # run_td3()
+    run_td3exp()
