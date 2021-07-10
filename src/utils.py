@@ -1,9 +1,13 @@
-from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Union, Generator
-import itertools
 import datetime
+import itertools
+import numbers
+from pathlib import Path
+from typing import Any, Dict, Generator, Optional, Sequence, Union
 
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+from matplotlib.figure import Figure
 
 
 def save_dic_txt(
@@ -199,6 +203,41 @@ def new_dic(dic: Optional[Dict[Any, Any]]) -> Dict[Any, Any]:
     if dic is not None:
         return dic.copy()
     return {}
+
+
+def plot_seq(
+    seq: Sequence[numbers.Real], ylabel: str = "", allow_ylog: bool = True
+) -> Figure:
+    """
+    Plot the sequence using matplotlib
+
+    Parameters:
+        - ylabel: the label of the y axis
+        - allow_ylog: if all the sequence values are greater than zero the yaxis shows
+            a logaritmic scale. Use `False` to disable this characteristic.
+    """
+    y = np.array(seq)
+    mask = np.isfinite(y)
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+
+    if all(~mask):  # if nothing to plot return the empty figure
+        return fig
+
+    if mask[0] == False:  # If first value is nan
+        y[0] = y[mask][0]  # Change first nan to first number
+        mask[0] = True
+
+    min_ = min(y[mask])
+    # ax.plot(np.arange(len(y))[mask], y[mask])
+    ax.plot(np.arange(len(y)), y)
+    ax.set_ylabel(ylabel)
+
+    if min_ > 0 and allow_ylog:
+        ax.set_yscale("log")
+
+    return fig
 
 
 if __name__ == "__main__":

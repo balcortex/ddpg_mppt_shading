@@ -2,13 +2,25 @@ from typing import Optional, Dict, Any
 
 import stable_baselines3 as sb3
 
-from src.model import TrainableModel
+from src.model import Model
 from src.env import ShadedPVEnv
 from src.experience import ExperienceSource
 from src.policy import SB3Policy
+import src.utils
 
 
-class SB3Model(TrainableModel):
+class SB3Model(Model):
+    """
+    Use Stable Baselines 3 to solve the MPPT problem
+
+    Parameters:
+        - model_name: 'ddpg', 'td3', sac, 'a2c' or 'ppo'
+        - model_kwargs: keyword arguments for the selected model
+            (see the Stable Baseline documentation)
+        - env_kwargs: keyword arguments for the enviroment
+            (see the ShadedPVEnv documentation)
+    """
+
     def __init__(
         self,
         model_name: str,
@@ -48,15 +60,6 @@ class SB3Model(TrainableModel):
 
         self.save_config_dic()
 
-    def run(
-        self,
-        total_timesteps: int,
-        val_every_timesteps: int = -1,
-        n_eval_episodes: int = 1,
-    ):
-        self._env_steps += total_timesteps
-        self.learn(total_timesteps, val_every_timesteps, n_eval_episodes)
-
     def learn(
         self,
         timesteps: int,
@@ -72,121 +75,32 @@ class SB3Model(TrainableModel):
             eval_freq=val_every_timesteps,
         )
 
-    def save_plot_losses(self) -> None:
-        pass
-
-
-class SB3DDPG(SB3Model):
-    def __init__(
-        self,
-        lr: float = 1e-3,
-        gamma: float = 0.1,
-        verbose: int = 1,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
+    @classmethod
+    def run_from_grid(
+        cls,
+        dic: Dict[Any, Any],
+        total_timesteps: int,
+        val_every_timesteps: int = 0,
+        repeat_run: int = 1,
         **kwargs,
-    ):
-
-        model_kwargs = {
-            "learning_rate": lr,
-            "gamma": gamma,
-            "verbose": verbose,
-        }
-
-        super().__init__(
-            "ddpg",
-            model_kwargs=model_kwargs,
-            env_kwargs=env_kwargs,
-            **kwargs,
-        )
+    ) -> None:
+        # Get a permutation of the dic if needed
+        gg = src.utils.grid_product(dic)
+        for dic in gg:
+            for _ in range(repeat_run):
+                model = cls(**dic, **kwargs)
+                model.learn(total_timesteps, val_every_timesteps)
+                model.quit()
 
 
-class SB3TD3(SB3Model):
-    def __init__(
-        self,
-        lr: float = 1e-3,
-        gamma: float = 0.1,
-        verbose: int = 1,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        **kwargs,
-    ):
-        model_kwargs = {
-            "learning_rate": lr,
-            "gamma": gamma,
-            "verbose": verbose,
-        }
-
-        super().__init__(
-            "td3",
-            model_kwargs,
-            env_kwargs=env_kwargs,
-            **kwargs,
-        )
-
-
-class SB3A2C(SB3Model):
-    def __init__(
-        self,
-        lr: float = 1e-3,
-        gamma: float = 0.1,
-        verbose: int = 1,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        **kwargs,
-    ):
-        model_kwargs = {
-            "learning_rate": lr,
-            "gamma": gamma,
-            "verbose": verbose,
-        }
-
-        super().__init__(
-            "a2c",
-            model_kwargs,
-            env_kwargs=env_kwargs,
-            **kwargs,
-        )
-
-
-class SB3SAC(SB3Model):
-    def __init__(
-        self,
-        lr: float = 1e-3,
-        gamma: float = 0.1,
-        verbose: int = 1,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        **kwargs,
-    ):
-        model_kwargs = {
-            "learning_rate": lr,
-            "gamma": gamma,
-            "verbose": verbose,
-        }
-
-        super().__init__(
-            "sac",
-            model_kwargs,
-            env_kwargs=env_kwargs,
-            **kwargs,
-        )
-
-
-class SB3PPO(SB3Model):
-    def __init__(
-        self,
-        lr: float = 1e-3,
-        gamma: float = 0.1,
-        verbose: int = 1,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        **kwargs,
-    ):
-        model_kwargs = {
-            "learning_rate": lr,
-            "gamma": gamma,
-            "verbose": verbose,
-        }
-
-        super().__init__(
-            "ppo",
-            model_kwargs,
-            env_kwargs=env_kwargs,
-            **kwargs,
-        )
+if __name__ == "__main__":
+    dic = {
+        "model_name": "ppo",
+        "model_kwargs": {"gamma": 0.01},
+        "env_kwargs": {
+            "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
+        },
+    }
+    model = SB3Model.run_from_grid(
+        dic, total_timesteps=30_000, val_every_timesteps=1_000
+    )

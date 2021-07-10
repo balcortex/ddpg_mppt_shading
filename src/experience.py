@@ -1,12 +1,13 @@
 import numbers
 from collections import deque
-from typing import List, NamedTuple, Sequence, Dict, Tuple
+from typing import List, NamedTuple, Sequence, Dict, Tuple, Optional, Any, Union
 import gym
 
 import numpy as np
 import torch as th
 
 from src.policy import Policy
+from src.env import EnvironmentTracker
 
 Tensor = th.Tensor
 
@@ -56,47 +57,45 @@ class PrioritizedExperienceTensorBatch(NamedTuple):
 
 
 class ExperienceSource:
-    """
-    Class that automates the interaction with the environment, making the reset calls transparent when the episode is finished.
-    The methods return trajectories,
-
-    Parameters:
-        - policy: the policy that decides the actions taken
-        - env: the environment on which the policy performs
-        - gamma: the discount factor (when n_steps > 1)
-        - n_steps: perform the number of steps in the environment and discount the reward
-    """
-
     def __init__(
-        self, policy: Policy, env: gym.Env, gamma: float = 1.0, n_steps: int = 1
+        self,
+        policy: Policy,
+        env: gym.Env,
+        gamma: float = 1.0,
+        n_steps: int = 1,
+        env_tracker: Optional[EnvironmentTracker] = None,
     ):
+        """
+        Class that automates the interaction with the environment, making the reset calls transparent when the episode is finished.
+        The methods return trajectories,
+
+        Parameters:
+            - policy: the policy that decides the actions taken
+            - env: the environment on which the policy performs
+            - gamma: the discount factor (when n_steps > 1)
+            - n_steps: perform the number of steps in the environment and discount the reward
+        """
         self.policy = policy
         self.env = env
         self.gamma = gamma
         self.n_steps = n_steps
-        self.reset()
 
-    def reset(self) -> None:
-        """Reset the experience source"""
-        self.obs = self.env.reset()
-        self.done = False
-        self.info = {}
+        self.env_tracker = env_tracker or EnvironmentTracker(env)
+        self.obs = None
+
+        if not self.env_tracker.is_ready:
+            self.env_tracker.reset()
 
     def play_step(self) -> Experience:
         """Play one step in the environent and return the trajectory"""
-        if self.done:
-            self.reset()
+        if self.env_tracker.done:
+            self.env_tracker.reset()
 
-        action = self.policy(self.obs, self.info)
-        obs_, reward, done, self.info = self.env.step(action)
+        self.obs = self.env_tracker.obs
+        action = self.policy(self.env_tracker.obs, self.env_tracker.info)
+        step = self.env_tracker.step(action)
 
-        if done:
-            self.done = True
-            # Need to mask the last_state
-            return Experience(self.obs, action, reward, done, self.obs)
-
-        obs, self.obs = self.obs, obs_
-        return Experience(obs, action, reward, done, self.obs)
+        return Experience(self.obs, action, step.reward, step.done, step.obs)
 
     def play_episode(self) -> Sequence[Experience]:
         """
@@ -108,8 +107,8 @@ class ExperienceSource:
             experience = self.play_step()
             ep_history.append(experience)
 
-            if self.done:
-                self.reset()
+            if self.env_tracker.done:
+                self.env_tracker.reset()
                 return ep_history
 
     def play_n_steps(self) -> Experience:
@@ -135,7 +134,7 @@ class ExperienceSource:
 
     @property
     def config_dic(self) -> Dict[str, str]:
-        """"Return the parameters of the class as a dictionary"""
+        """Returns the parameters of the class as a dictionary"""
         ignore = ["obs", "done", "info", "env"]
         return {k: str(v) for k, v in self.__dict__.items() if k not in ignore}
 
@@ -233,7 +232,7 @@ class ReplayBuffer:
 
     @property
     def config_dic(self) -> Dict[str, str]:
-        """"Return the parameters of the class as a dictionary"""
+        """Returns the parameters of the class as a dictionary"""
         return {k: str(v) for k, v in self.__dict__.items() if not k.startswith("_")}
 
 
@@ -310,7 +309,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         )
 
     def _get_indices(self, batch_size: int) -> np.ndarray:
-        """"Perform prioritized sampling"""
+        """Performs prioritized sampling"""
         prios = np.array(self._prios_deq)
         probs = prios ** self.alpha
         probs /= probs.sum()
@@ -335,14 +334,17 @@ if __name__ == "__main__":
     from src.env import DummyEnv
     from src.policy import RandomPolicy
 
-    prio_buffer = PrioritizedReplayBuffer(100)
-    env = DummyEnv()
-    policy = RandomPolicy(env.action_space)
-    exp_source = ExperienceSource(policy, env, gamma=1.0, n_steps=1)
+    env = DummyEnv(max_steps=5)
+    es = ExperienceSource(RandomPolicy(env.action_space), env)
 
-    for _ in range(3):
-        exp = exp_source.play_step()
-        prio_buffer.append(exp)
+    es.env_tracker.counter_total_steps
+    es.env_tracker.counter_episode_steps
+    es.env_tracker.counter_total_episodes
+    es.env_tracker._cum_reward
+    es.env_tracker.history["ep_reward"]
+
+    es.play_step()
+    # es.env_tracker.reset()
 
     # from src.model import PerturbObserveModel
 

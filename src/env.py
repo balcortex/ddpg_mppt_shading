@@ -6,7 +6,7 @@ import itertools
 import numbers
 from collections import defaultdict, namedtuple
 from pathlib import Path
-from typing import Any, Dict, NamedTuple, Optional, Sequence, Tuple, Union
+from typing import Any, DefaultDict, Dict, NamedTuple, Optional, Sequence, Tuple, Union
 
 import gym
 import matplotlib.pyplot as plt
@@ -46,11 +46,157 @@ DEFAULT_LOG_STATES = (
 DEFAULT_PLOT_STATES = {
     # key -> filename, val -> plot from df
     # "power": ("power", "optimum_power"),
-    "duty_cycle": ("duty_cycle", "optimum_duty_cycle"),
+    # "duty_cycle": ("duty_cycle", "optimum_duty_cycle"),
 }
 DEFAULT_NORM_DIC = {"power": 200, "voltage": 36}
 DEFAULT_LOG_PATH = Path("default")
 DEFAULT_REWARD = 0
+DEFAULT_WEATHER_PATH_NAMES = ["train_1_4_0.5", "test_1_4_0.5"]
+
+
+class EnvStep(NamedTuple):
+    obs: np.ndarray
+    reward: numbers.Real
+    done: bool
+    info: Dict[Any, Any]
+
+
+class EnvironmentTracker:
+    def __init__(self, env: gym.Env):
+        """
+        Keep track of the state of an Environment
+
+        Parameters:
+            - env: the environment
+        """
+
+        self.env = env
+
+        self.counter_episode_steps = 0
+        self.counter_total_steps = 0
+        self.counter_total_episodes = -1
+        self._logged_at_episode = 0
+
+        self._cum_reward = np.nan
+        self.history = DefaultDict(list)
+
+        self.obs = None
+
+    def reset(self) -> np.ndarray:
+        """Reset the environment and return its first observation"""
+        if not np.isnan(self._cum_reward):
+            self.track("ep_reward", self._cum_reward)
+        self._cum_reward = 0.0
+
+        self.counter_total_episodes += 1
+        self.counter_episode_steps = 0
+
+        return self(self.env.reset())
+
+    def step(self, action: np.ndarray) -> EnvStep:
+        """Take a step in the environment and return the new observation"""
+        return self(self.env.step(action))
+
+    def track(self, name: str, value: numbers.Real) -> None:
+        """
+        Append the `value` to a list in the dictionary `user` whose key is `name`.
+        Two lists are created, one that keeps track of all values and the other to
+        give the user the ability to modify the list on demand.
+
+        """
+        self.history[name].append(value)
+        # self.history[name + "_all"].append(value)
+
+    def __call__(self, step: Union[np.ndarray, EnvStep]) -> Union[np.ndarray, EnvStep]:
+        """Store the information of `step` and return it without changes"""
+        if isinstance(step, np.ndarray):
+            self.obs = step
+            self.reward = 0.0
+            self.done = False
+            self.info = {}
+        else:
+            self._cum_reward += step.reward
+
+            self.counter_total_steps += 1
+            self.counter_episode_steps += 1
+
+            self.obs = step.obs
+            self.reward = step.reward
+            self.done = step.done
+            self.info = step.info
+
+        return step
+
+    @property
+    def is_ready(self) -> bool:
+        return not self.obs is None
+
+    @property
+    def new_episode_available(self) -> bool:
+        return self.counter_total_episodes > self._logged_at_episode
+
+    @new_episode_available.setter
+    def new_episode_available(self, value: bool):
+        if value == False:
+            self._logged_at_episode = self.counter_total_episodes
+
+    def print_tracking(
+        self, avg: int = 0, ignore: Optional[Sequence[str]] = None
+    ) -> None:
+        """
+        Print the tracked values
+
+        Parameters:
+            - avg: the num of values to average. If `0` average all values
+
+        """
+        ignore = ignore or []
+
+        for key, lst in self.history.items():
+            if any(ign in key for ign in ignore):
+                continue
+
+            mean = np.mean(lst[-avg:])
+            std = np.std(lst[-avg:])
+            print(f"{key}={mean:0.2f} +/- {std:0.2f}")
+
+    def save_as_csv(self, hist_key: str, parent_path: Path) -> None:
+        """
+        Save the list contained in the history dict
+
+        Parameters:
+            - hist_key: the key
+            - parent_path: the path
+        """
+        arr = np.array(self.history[hist_key])
+        arr.tofile(parent_path.joinpath(f"{hist_key}.csv"), sep="\n")
+
+    def save_all_as_csv(
+        self, parent_path: Path, ignore: Optional[Sequence[str]] = None
+    ) -> None:
+        """
+        Save all lists in the history dict
+
+        Parameters:
+            - parent_path: the path
+            - ignore: ignore the keys that contains the strings in this sequence
+        """
+
+        ignore = ignore or []
+
+        for key in self.history.keys():
+            if any(ign in key for ign in ignore):
+                continue
+            self.save_as_csv(key, parent_path)
+
+    def save_plot_metrics(self, parent_path: Path) -> None:
+        for k, seq in self.history.items():
+            fig = utils.plot_seq(
+                seq, ylabel=k, allow_ylog=not ("eff" in k or "reward" in k)
+            )
+            fig.savefig(parent_path.joinpath(f"{k}.png"))
+            fig.clf()
+            plt.close(fig)
 
 
 class CustomEnv(gym.Env, abc.ABC):
@@ -65,7 +211,7 @@ class CustomEnv(gym.Env, abc.ABC):
         self._called_reset = False
         self._done = True
 
-    def step(self, action) -> Tuple[np.ndarray, numbers.Real, bool, Dict[Any, Any]]:
+    def step(self, action) -> EnvStep:
         assert (
             self._called_reset == True
         ), f"Cannot call env.step() before calling reset()"
@@ -84,9 +230,7 @@ class CustomEnv(gym.Env, abc.ABC):
         return self._close()
 
     @abc.abstractmethod
-    def _step(
-        self, action: np.ndarray
-    ) -> Tuple[np.ndarray, numbers.Real, bool, Dict[Any, Any]]:
+    def _step(self, action: np.ndarray) -> EnvStep:
         """Play a step in the environment and return the observation"""
 
     @abc.abstractmethod
@@ -118,13 +262,13 @@ class DummyEnv(CustomEnv):
         self.cur_step = 0
         return np.array([self.cur_step])
 
-    def _step(
-        self, action: np.ndarray
-    ) -> Tuple[np.ndarray, numbers.Real, bool, Dict[Any, Any]]:
+    def _step(self, action: np.ndarray) -> EnvStep:
         """Play a step in the environment"""
         self.cur_step += 1
 
-        return np.array([self.cur_step]), 1.0, self.cur_step == self.max_steps, {}
+        return EnvStep(
+            np.array([self.cur_step]), 1.0, self.cur_step == self.max_steps, {}
+        )
 
     def _get_action_space(self) -> spaces.Space:
         """Return the action space"""
@@ -202,6 +346,8 @@ class ShadedPVEnv(CustomEnv):
         self._norm_dic = {} or dic_normalizer
         self._reward = reward
 
+        self.env_tracker = EnvironmentTracker(self)
+
         super().__init__()
 
     def __str__(self) -> str:
@@ -221,9 +367,7 @@ class ShadedPVEnv(CustomEnv):
 
         return self.step(action=self._action)[0]
 
-    def _step(
-        self, action: np.ndarray
-    ) -> Tuple[np.ndarray, numbers.Real, bool, Dict[Any, Any]]:
+    def _step(self, action: np.ndarray) -> EnvStep:
         """Play a step in the environment"""
         self._row_idx += 1
         self._action += action
@@ -238,9 +382,10 @@ class ShadedPVEnv(CustomEnv):
         self._weather_comb[(self._current_g, self._current_amb_t)] = None
 
         self._done = self._row_idx == len(self.weather_df) - 1
+
         info = self.log_state_as_tuple._asdict()
 
-        return self.state, self.reward, self.done, info
+        return EnvStep(self.state, self.reward, self.done, info)
 
     def _get_action_space(self) -> spaces.Space:
         """Return the action space"""
@@ -325,16 +470,24 @@ class ShadedPVEnv(CustomEnv):
             with open(self.path.joinpath("efficiency.txt"), "a") as f:
                 f.write(f"{self.time}:{eff:.2f}\n")
 
+            self.env_tracker.track("efficiency", eff)
+
+            # Rewards
+            rew = self.env_tracker.history["ep_reward"][-1]
+            with open(self.path.joinpath("ep_reward.txt"), "a") as f:
+                f.write(f"{self.time}:{rew:.4f}\n")
+
     def _plot_state_df(self, name: str, states: Union[str, Sequence[str]]) -> None:
         """Plot states the states and save to a file"""
         df = self.to_dataframe(self.history_all, rename_cols=False)
         ax = df.plot(y=list(states))
         fig = ax.get_figure()
         fig.savefig(self.path.joinpath(f"{self.time}_{name}.png"))
+        fig.clf()
         plt.close(fig)
 
     def quit(self) -> None:
-        """"Save the dataframe and exit the MATLAB engine"""
+        """Save the dataframe and exit the MATLAB engine"""
         self.reset()  # Save if anything must be saved
         self.pvarray.quit()
 
@@ -345,7 +498,7 @@ class ShadedPVEnv(CustomEnv):
 
     @property
     def reward(self) -> numbers.Real:
-        """"Return the reward at each step"""
+        """Return the reward at each step"""
         rew = self._history["norm_delta_power"][-1]
 
         if self._reward == 0:
@@ -473,6 +626,8 @@ class ShadedPVEnv(CustomEnv):
         **kwargs,
     ) -> Union[ShadedPVEnv, Sequence[ShadedPVEnv]]:
         """Get a sequence of ShadedPVEnvs, each one logged to a different folder"""
+        weather_paths = weather_paths or DEFAULT_WEATHER_PATH_NAMES
+
         if weather_paths is not None and env_names is not None:
             assert len(weather_paths) == len(env_names)
             num_envs = len(weather_paths)
@@ -486,6 +641,7 @@ class ShadedPVEnv(CustomEnv):
         if env_names is not None:
             paths = [path.joinpath(now_ + "_" + env_name) for env_name in env_names]
         else:
+            num_envs = len(weather_paths)
             paths = [
                 path.joinpath(f"{now_}_env{str(i).zfill(3)}") for i in range(num_envs)
             ]

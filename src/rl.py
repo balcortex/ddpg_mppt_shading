@@ -97,8 +97,9 @@ class MLPCritic(nn.Module):
 class TargetNet:
     "Wrapper around model which provides copy of it instead of trained weights"
 
-    def __init__(self, model: torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, alpha: float = 1e-3):
         self.model = model
+        self.alpha = alpha
         self.target_model = copy.deepcopy(model)
 
     def __call__(self, *args) -> Tensor:
@@ -110,11 +111,13 @@ class TargetNet:
     def sync(self) -> None:
         self.target_model.load_state_dict(self.model.state_dict())
 
-    def alpha_sync(self, alpha: float) -> None:
+    def alpha_sync(self, alpha: Optional[float] = None) -> None:
         """
         Blend params of target net with params from the model
         :param alpha:
         """
+        alpha = alpha or self.alpha
+
         state = self.model.state_dict()
         tgt_state = self.target_model.state_dict()
         for k, v in state.items():

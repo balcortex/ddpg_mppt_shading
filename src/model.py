@@ -2,30 +2,28 @@ from __future__ import annotations
 
 import json
 import numbers
-from pathlib import Path
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Sequence, Tuple
+from collections import defaultdict
+from pathlib import Path
+from typing import Any, DefaultDict, Dict, Optional, Sequence, Tuple, Union
 
 import gym
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch as th
-from torch.optim import Adam
-from tqdm import tqdm
+from matplotlib.figure import Figure
+from torch.optim import Adam, Optimizer
+from tqdm import tqdm, utils
 
 import src.policy
 import src.utils
 from src import rl
-from src.env import DummyEnv, ShadedPVEnv
-from src.experience import (
-    Experience,
-    ExperienceSource,
-    ExperienceTensorBatch,
-    PrioritizedExperienceTensorBatch,
-    PrioritizedReplayBuffer,
-    ReplayBuffer,
-)
+from src.env import DummyEnv, EnvironmentTracker, ShadedPVEnv
+from src.experience import (Experience, ExperienceSource,
+                            ExperienceTensorBatch,
+                            PrioritizedExperienceTensorBatch,
+                            PrioritizedReplayBuffer, ReplayBuffer)
 from src.policy import PerturbObservePolicy, Policy, RandomPolicy
 
 
@@ -50,8 +48,8 @@ class Model(ABC):
     def learn(self) -> None:
         """Run the learning process"""
 
-    def predict(self, obs: np.ndarray, info: Dict[str, Any]) -> np.ndarray:
-        return self.policy(obs=obs, info=info)
+    # def predict(self, obs: np.ndarray, info: Dict[str, Any]) -> np.ndarray:
+    #     return self.policy(obs=obs, info=info)
 
     def quit(self) -> None:
         self.env.quit()
@@ -61,9 +59,9 @@ class Model(ABC):
         self._env_steps += len(episode) * self.exp_source.n_steps
         return episode
 
-    def collect_step(self) -> Experience:
-        self._env_steps += self.exp_source.n_steps
-        return self.exp_source.play_n_steps()
+    # def collect_step(self) -> Experience:
+    #     self._env_steps += self.exp_source.n_steps
+    #     return self.exp_source.play_n_steps()
 
     def save_log(self) -> Path:
         path = self.path.joinpath("log.txt")
@@ -95,22 +93,6 @@ class Model(ABC):
     @property
     def path(self) -> Path:
         return self.env.path
-
-    @classmethod
-    def run_from_grid(
-        cls,
-        dic: Dict[Any, Any],
-        episodes: int = 1,
-        **kwargs,
-    ) -> None:
-        # Get a permutation of the dic if needed
-        gg = src.utils.grid_product(dic)
-        for dic in gg:
-            model = cls(**dic, **kwargs)
-            for _ in tqdm(range(episodes), desc="Playing episodes"):
-                model.play_episode()
-            model.save_log()
-            model.quit()
 
     @staticmethod
     def get_policy(
@@ -151,7 +133,44 @@ class DummyModel(Model):
         pass
 
 
-class PerturbObserveModel(Model):
+class StaticModel(Model):
+    """This model class does not learn"""
+
+    def __init__(
+        self,
+        env: gym.Env,
+        policy_name: str,
+        policy_kwargs: Optional[Dict[Any, Any]],
+        exp_source_kwargs: Optional[Dict[Any, Any]],
+    ):
+        super().__init__(
+            env,
+            policy_name,
+            policy_kwargs=policy_kwargs,
+            exp_source_kwargs=exp_source_kwargs,
+        )
+
+    def learn(self) -> None:
+        pass
+
+    @classmethod
+    def run_from_grid(
+        cls,
+        dic: Dict[Any, Any],
+        episodes: int = 1,
+        **kwargs,
+    ) -> None:
+        # Get a permutation of the dic if needed
+        gg = src.utils.grid_product(dic)
+        for dic in gg:
+            model = cls(**dic, **kwargs)
+            for _ in tqdm(range(episodes), desc="Playing episodes"):
+                model.play_episode()
+            model.save_log()
+            model.quit()
+
+
+class PerturbObserveModel(StaticModel):
     """Perturb & Obserb model. This model does not need training"""
 
     def __init__(
@@ -181,7 +200,7 @@ class PerturbObserveModel(Model):
         return None
 
 
-class RandomModel(Model):
+class RandomModel(StaticModel):
     """Random model. This model does not need training"""
 
     def __init__(
@@ -205,330 +224,393 @@ class RandomModel(Model):
         return None
 
 
-class TrainableModel(Model):
+class TD3Experience(Model):
     def __init__(
         self,
-        env: gym.Env,
-        policy_name: str,
-        policy_kwargs: Optional[Dict[Any, Any]],
-        exp_source_kwargs: Optional[Dict[Any, Any]],
-    ):
-        super().__init__(
-            env,
-            policy_name,
-            policy_kwargs=policy_kwargs,
-            exp_source_kwargs=exp_source_kwargs,
-        )
-
-        self._train_steps = 0
-
-    @abstractmethod
-    def learn(self) -> None:
-        """Run the learning process"""
-
-    @abstractmethod
-    def save_plot_losses(self) -> None:
-        """Save the losses during the training process"""
-
-    def run(
-        self,
-        total_timesteps: int,
-        val_every_timesteps: int = -1,
-        n_eval_episodes: int = 1,
-    ):
-        val_every_timesteps = val_every_timesteps or total_timesteps
-        iters = total_timesteps // val_every_timesteps
-
-        for it in range(iters):
-            self.learn(val_every_timesteps)
-            for ep in range(n_eval_episodes):
-                self.play_test_episode()
-            self.save_log()
-            self.save_plot_losses()
-
-    def play_test_episode(self) -> None:
-        self.agent_exp_source.play_episode()
-
-    def save_log(self) -> None:
-        path = super().save_log()
-        with open(path, "a") as f:
-            f.write(f"Train steps: {self._train_steps}\n")
-
-    @property
-    def collect_exp_source(self) -> ExperienceSource:
-        return self.exp_source
-
-    @staticmethod
-    def apply_losses(losses: Sequence[th.Tensor], optim: Adam) -> None:
-
-        losses = th.cat(tuple(l.unsqueeze(-1) for l in losses))
-
-        if all(th.isnan(losses)):
-            return th.tensor(np.nan)
-
-        mask = th.isnan(losses)
-        total_loss = th.sum(losses[~mask])
-
-        optim.zero_grad()
-        total_loss.backward()
-        optim.step()
-
-        return total_loss
-
-    @classmethod
-    def run_from_grid(
-        cls,
-        dic: Dict[Any, Any],
-        total_timesteps: int,
-        val_every_timesteps: int = 0,
-        repeat_run: int = 1,
-        **kwargs,
-    ) -> None:
-        # Get a permutation of the dic if needed
-        gg = src.utils.grid_product(dic)
-        for dic in gg:
-            for _ in range(repeat_run):
-                model = cls(**dic, **kwargs)
-                model.run(total_timesteps, val_every_timesteps)
-                model.quit()
-
-
-class DDPG(TrainableModel):
-    """DDPG Model"""
-
-    def __init__(
-        self,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        policy_kwargs: Optional[Dict[Any, Any]] = None,
-        buffer_kwargs: Optional[Dict[Any, Any]] = None,
-        test_policy_kwargs: Optional[Dict[Any, Any]] = None,
         batch_size: int = 64,
+        buffer_size: int = 50_000,
+        demo_buffer_size: int = 1200,
         actor_lr: float = 1e-4,
         critic_lr: float = 1e-3,
         actor_l2: float = 0.0,
         critic_l2: float = 0.0,
-        tau_critic: float = 1e-3,
-        tau_actor: float = 1e-3,
-        gamma: float = 0.99,
+        tau_critic: float = 1e-4,
+        tau_actor: float = 1e-4,
+        gamma: float = 0.1,
         n_steps: int = 1,
         norm_rewards: int = 0,
         train_steps: int = 1,
         collect_steps: int = 1,
-        prefill_buffer: int = 0,
+        prefill_buffer: int = 2000,
         use_per: bool = False,
-        warmup: int = 0,
+        warmup_train_steps: int = 1000,
+        lambda_demo_critic: float = 0.1,
+        lambda_demo_actor: float = 0.1,
+        lambda_bc: float = 0.1,
+        use_q_filter: bool = False,
+        policy_delay: int = 2,
+        target_action_epsilon_noise: float = 0.001,
+        env_kwargs: Dict[str, Any] = None,
+        policy_kwargs: Optional[Dict[Any, Any]] = None,
+        test_policy_kwargs: Optional[Dict[Any, Any]] = None,
+        buffer_kwargs: Optional[Dict[Any, Any]] = None,
+        buffer_demo_kwargs: Optional[Dict[Any, Any]] = None,
     ):
-        """
-        per: use the Prioritized Experience Buffer
-        """
-        env_kwargs = env_kwargs or {}
-        env_kwargs.setdefault("env_names", ["ddpg_train", "ddpg_test"])
-        env, self.env_test = ShadedPVEnv.get_envs(**env_kwargs)
-        self.actor, self.critic = rl.create_mlp_actor_critic(env=env)
 
-        test_policy_kwargs = test_policy_kwargs or {}
-        test_policy_kwargs.update({"net": self.actor})
-        test_policy = self.get_policy("mlp", self.env_test, test_policy_kwargs)
-
+        # - - - Class members
+        self.batch_size = batch_size
+        self.buffer_size = buffer_size  # not used
+        self.buffer_demo_size = demo_buffer_size  # not used
+        self.actor_lr = actor_lr  # not used
+        self.critic_lr = critic_lr  # not used
+        self.actor_l2 = actor_l2  # not used
+        self.critic_l2 = critic_l2  # not used
         self.gamma = gamma
         self.n_steps = n_steps
-        self.batch_size = batch_size
-        self.tau_critic = tau_critic
-        self.tau_actor = tau_actor
         self.norm_rewards = norm_rewards
-        self.train_steps = train_steps
-        self.collect_steps = collect_steps
-        self.warmup = warmup
+        self.train_steps_per_timestep = train_steps
+        self.collect_steps_per_timestep = collect_steps
+        self.prefill_buffer = prefill_buffer  # not used
+        self.use_per = use_per
+        self.warmup_train_steps = warmup_train_steps  # not used
+        self.lamda_demo_critic = lambda_demo_critic
+        self.lambda_demo_actor = lambda_demo_actor
+        self.lambda_bc = lambda_bc
+        self.use_q_filter = use_q_filter
+        self.policy_delay = policy_delay
+        self.target_action_noise = target_action_epsilon_noise
 
-        self.agent_exp_source = ExperienceSource(
-            test_policy, self.env_test, gamma=gamma, n_steps=n_steps
-        )
-        self.buffer = (
-            ReplayBuffer(**buffer_kwargs)
-            if not use_per
-            else PrioritizedReplayBuffer(**buffer_kwargs)
-        )
+        # - - - Dict handling
+        env_kwargs = src.utils.new_dic(env_kwargs)
+        env_kwargs.setdefault("env_names", ["td3exp_train", "td3exp_test"])
+
+        policy_kwargs = src.utils.new_dic(policy_kwargs)
+        test_policy_kwargs = src.utils.new_dic(test_policy_kwargs)
+
+        buffer_kwargs = src.utils.new_dic(buffer_kwargs)
+        buffer_kwargs.setdefault("capacity", buffer_size)
+
+        buffer_demo_kwargs = src.utils.new_dic(buffer_demo_kwargs)
+        buffer_demo_kwargs.setdefault("capacity", demo_buffer_size)
+
+        # - - - Environments
+        envs: Sequence[ShadedPVEnv] = ShadedPVEnv.get_envs(**env_kwargs)
+        self.env = envs[0]
+        self.env_test = envs[1]
+
+        # - - - Folders
+        self.path_plots = self.env.path.joinpath("plots")
+        self.path_csvs = self.env.path.joinpath("csvs")
+        self.path_plots_test = self.env_test.path.joinpath("plots")
+        self.path_csvs_test = self.env_test.path.joinpath("csvs")
+        Path.mkdir(self.path_plots)
+        Path.mkdir(self.path_csvs)
+        Path.mkdir(self.path_plots_test)
+        Path.mkdir(self.path_csvs_test)
+
+        # - - - Networks
+        self.actor = rl.create_mlp_actor(self.env)
+        self.critic = rl.create_mlp_critic(self.env)
+        self.critic2 = rl.create_mlp_critic(self.env)
+        self.actor_target = rl.TargetNet(self.actor, alpha=tau_actor)
+        self.critic_target = rl.TargetNet(self.critic, alpha=tau_critic)
+        self.critic2_target = rl.TargetNet(self.critic2, alpha=tau_critic)
+
+        # - - - Optimizers
         self.actor_optim = Adam(
             self.actor.parameters(), lr=actor_lr, weight_decay=actor_l2
         )
         self.critic_optim = Adam(
             self.critic.parameters(), lr=critic_lr, weight_decay=critic_l2
         )
-        self.actor_target = rl.TargetNet(self.actor)
-        self.critic_target = rl.TargetNet(self.critic)
-        self.actor_target.sync()
-        self.critic_target.sync()
-
-        policy_kwargs = policy_kwargs or {}
-        policy_kwargs.update({"net": self.actor})
-        super().__init__(
-            env,
-            policy_name="mlp",
-            policy_kwargs=policy_kwargs,
-            exp_source_kwargs={"gamma": gamma, "n_steps": n_steps},
+        self.critic2_optim = Adam(
+            self.critic2.parameters(), lr=critic_lr, weight_decay=critic_l2
         )
 
-        # self.step_counter = 0
-        self.actor_loss = []
-        self.critic_loss = []
+        # - - - Loss tracking
+        self._counter_train_steps = 0
+        self.losses_env_steps = defaultdict(list)
+        self.losses_train_steps = defaultdict(list)
 
-        # Fill replay buffer with random policy (explore policy)
-        random_policy = RandomPolicy(self.env.action_space)
-        explore_exp_source = ExperienceSource(
-            random_policy, self.env, self.gamma, self.n_steps
+        # - - - Experience sources
+        self.env_tracker = self.env.env_tracker
+        self.exp_source = self._get_experience_source(
+            env=self.env, env_tracker=self.env_tracker, **policy_kwargs
         )
-        # if warmup:
-        #     prefill_buffer = prefill_buffer or batch_size
-        self._env_steps += self.fill_buffer(
+        self.exp_source_explore = ExperienceSource(
+            RandomPolicy(self.env.action_space),
+            self.env,
+            gamma,
+            n_steps,
+            env_tracker=self.env_tracker,
+        )
+        self.exp_source_demo = ExperienceSource(
+            PerturbObservePolicy(self.env.action_space),
+            self.env,
+            self.gamma,
+            self.n_steps,
+            env_tracker=self.env_tracker,
+        )
+        self.env_tracker_test = self.env_test.env_tracker
+        self.exp_source_test = self._get_experience_source(
+            env=self.env_test,
+            env_tracker=self.env_tracker_test,
+            **test_policy_kwargs,
+        )
+
+        # - - - Buffers
+        self.buffer = self._get_buffer(use_per=use_per, **buffer_kwargs)
+        self.buffer_demo = self._get_buffer(use_per=use_per, **buffer_demo_kwargs)
+        self._fill_buffer(
             self.buffer,
-            explore_exp_source,
+            self.exp_source_explore,
             num_experiences=prefill_buffer,
-            description="Filling buffer with random experiences",
+            description="Filling replay buffer with random experiences",
         )
-        self._update_losses(losses={}, repeat=prefill_buffer)
+        self._fill_buffer(
+            self.buffer_demo,
+            self.exp_source_demo,
+            num_experiences=-1,
+            description="Filling replay demo buffer",
+        )
 
-        self._pre_trained = False
-
-        self.save_config_dic()
-
-    @property
-    def _loss_names(self) -> Sequence[str]:
-        return ["actor_loss", "critic_loss"]
+        # Add losses (np.nan) for each step taken in the prefilling for each loss
+        dic = {k: np.nan for k in self.available_losses}
+        for _ in range(self.prefill_buffer + self.buffer_demo.capacity):
+            self._track(self.env_tracker, dic)
 
     def learn(
         self,
-        epochs: int = 1000,
-    ) -> None:
-        if not self._pre_trained:
-            for i in tqdm(range(1, self.warmup + 1), desc="Warm-up training"):
-                self._train_nets(train_steps=1)
-            self._pre_trained = True
+        timesteps: int,
+        val_every_timesteps: int = 0,
+        n_eval_episodes: int = 1,
+        log_interval: int = 1,
+        plot_every_timesteps: int = 0,
+    ):
+        val_every_timesteps = val_every_timesteps or timesteps + 1
+        plot_every_timesteps = plot_every_timesteps or timesteps
 
-        for i in tqdm(range(1, epochs + 1), desc="Training"):
-            losses = self._train_nets(self.train_steps)
+        for ts_counter in tqdm(range(1, timesteps + 1), desc="Training"):
+            # ts_counter = self.env_tracker.counter_total_steps
 
-            # Collect steps using the trained policy
-            self._env_steps += self.fill_buffer(
-                self.buffer, self.collect_exp_source, num_experiences=1
+            # - - - Testing
+            if ts_counter % val_every_timesteps == 0:
+                for _ in range(n_eval_episodes):
+                    self.exp_source_test.play_episode()
+
+                print("\n * Test episode")
+                self.env_tracker_test.print_tracking(avg=n_eval_episodes)
+                print()
+
+            # - - - Logging
+            if self.env_tracker.new_episode_available:
+                self.env_tracker.new_episode_available = False
+                print(f"\nEval num_timesteps={ts_counter}")
+                print(f"training_steps={self._counter_train_steps}")
+                self.env_tracker.print_tracking(
+                    avg=log_interval, ignore=["loss", "filter"]
+                )
+                print()
+
+            # - - - Training
+            for _ in range(self.train_steps_per_timestep):
+                self._counter_train_steps += 1
+                losses = self._train_nets()
+            self._track(self.env_tracker, losses)  # Keep only the last set of losses
+
+            # - - - Collect
+            self._fill_buffer(
+                self.buffer,
+                self.exp_source,
+                num_experiences=self.collect_steps_per_timestep,
             )
 
-            # Update losses tracking
-            self._update_losses(losses)
+            # - - - Plotting
+            if ts_counter % plot_every_timesteps == 0:
+                self.env_tracker.save_plot_metrics(self.path_plots)
+                self.env_tracker.save_all_as_csv(self.path_csvs)
+                self.env_tracker_test.save_plot_metrics(self.path_plots_test)
+                self.env_tracker_test.save_all_as_csv(self.path_csvs_test)
 
-    def _update_losses(
-        self, losses: Optional[Dict[str, numbers.Real]] = None, repeat: int = 1
-    ) -> None:
-        if not losses:
-            for _ in range(repeat):
-                for l in self._loss_names:
-                    getattr(self, l).append(np.nan)
-            return None
+    @property
+    def available_losses(self) -> Sequence[str]:
+        return [
+            "critic_loss_rl",
+            "critic_loss_demo",
+            "critic_loss",
+            "critic2_loss_rl",
+            "critic2_loss_demo",
+            "critic2_loss",
+            "actor_loss_rl",
+            "actor_loss",
+            "actor_loss_demo",
+            "bc_loss",
+            "q_filter",
+        ]
 
-        for loss, value in losses.items():
-            for _ in range(repeat):
-                getattr(self, loss).append(value)
+    @property
+    def available_metrics(self) -> Sequence[str]:
+        return ["efficiency", "ep_reward"]
 
-    def plot_loss(self, loss: str, log_y: bool = False) -> matplotlib.figure.Figure:
-        """
-        loss: 'critic_loss' or 'actor_loss'
-        """
+    @staticmethod
+    def _track(
+        tracker: EnvironmentTracker,
+        dic: Dict[str, Union[numbers.Real], Sequence[numbers.Real]],
+    ):
+        """Interface method to track using a dictionary"""
+        for k, v in dic.items():
+            tracker.track(k, float(v))
 
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
+    def _train_nets(self) -> Dict[str, numbers.Real]:
+        batch = self._prepare_batch(
+            self.buffer, self.batch_size, norm_rewards=self.norm_rewards
+        )
+        batch_demo = self._prepare_batch(
+            self.buffer_demo, self.batch_size, norm_rewards=self.norm_rewards
+        )
 
-        x = np.arange(self._env_steps)
-        y = np.array(getattr(self, loss))
-        mask = np.isfinite(y)
+        critics_loss = self._get_critic_loss(batch, self.buffer)
+        critics_loss_demo = self._get_critic_loss(batch_demo, self.buffer_demo)
+        critic_loss_rl = critics_loss[0]
+        critic_loss_demo = critics_loss_demo[0] * self.lamda_demo_critic
+        critic_loss = self._apply_losses(
+            [critic_loss_rl, critic_loss_demo], self.critic_optim
+        )
+        critic2_loss_rl = critics_loss[1]
+        critic2_loss_demo = critics_loss_demo[1] * self.lamda_demo_critic
+        critic2_loss = self._apply_losses(
+            [critic2_loss_rl, critic2_loss_demo], self.critic2_optim
+        )
 
-        ax.plot(x[mask], y[mask])
-        ax.set_xlabel("Environment steps")
-        ax.set_ylabel(loss)
+        actor_loss_rl = self._get_actor_loss(batch)
+        actor_loss_demo = self._get_actor_loss(batch_demo) * self.lambda_demo_actor
+        bc_losses = self._get_bc_loss(batch_demo)
+        bc_loss = bc_losses[0] * self.lambda_bc
+        q_filter = bc_losses[1]
 
-        if log_y:
-            ax.set_yscale("log")
+        apply = self._counter_train_steps % self.policy_delay == 0
+        actor_loss = self._apply_losses(
+            [actor_loss_rl, actor_loss_demo, bc_loss], self.actor_optim, apply=apply
+        )
 
-        return fig
+        losses_dic = {
+            "critic_loss_rl": critic_loss_rl.detach().cpu().numpy(),
+            "critic_loss_demo": critic_loss_demo.detach().cpu().numpy(),
+            "critic_loss": critic_loss.detach().cpu().numpy(),
+            "critic2_loss_rl": critic2_loss_rl.detach().cpu().numpy(),
+            "critic2_loss_demo": critic2_loss_demo.detach().cpu().numpy(),
+            "critic2_loss": critic2_loss.detach().cpu().numpy(),
+            "actor_loss_rl": actor_loss_rl.detach().cpu().numpy(),
+            "actor_loss_demo": actor_loss_demo.detach().cpu().numpy(),
+            "actor_loss": actor_loss.detach().cpu().numpy(),
+            "bc_loss": bc_loss.detach().cpu().numpy(),
+            "q_filter": q_filter,
+        }
 
-    # def save_loss(self, loss: str) -> None:
-    #     path = self.path.joinpath(f'{loss}.csv')
+        return {k: v for k, v in losses_dic.items() if k in self.available_losses}
 
-    def save_plot_losses(self) -> None:
-        fig_actor_loss = self.plot_loss("actor_loss")
-        fig_critic_loss = self.plot_loss("critic_loss", log_y=True)
+    def _get_bc_loss(
+        self, demo_batch: ExperienceTensorBatch
+    ) -> Tuple[th.Tensor, numbers.Real]:
+        if demo_batch is None:
+            return th.tensor(np.nan), np.nan
 
-        fig_actor_loss.savefig(self.path.joinpath("actor_loss.png"))
-        fig_critic_loss.savefig(self.path.joinpath("critic_loss.png"))
+        agent_action = self.actor(demo_batch.obs)
 
-        plt.close(fig_actor_loss)
-        plt.close(fig_critic_loss)
+        if self.use_q_filter:
+            q_expert = self.critic(demo_batch.obs, demo_batch.action)
+            q_agent = self.critic(demo_batch.obs, agent_action)
+            ind = (q_expert > q_agent).detach()
+            q_filter_num = sum(ind)
+        else:
+            ind = th.ones_like(agent_action, dtype=th.bool)
+            q_filter_num = 0
 
-    def _train_nets(self, train_steps: int) -> Dict[str, numbers.Real]:
-        for _ in range(train_steps):
-            self._train_steps += 1
+        error = demo_batch.action[ind] - agent_action[ind]
 
-            batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
+        # demo_weights = np.sqrt(demo_batch.weights)
+        # weighted_error = th.mul(error, demo_weights[ind])
+        zero_tensor = th.zeros_like(error)
+        bc_loss = th.nn.functional.mse_loss(error, zero_tensor)
+        # bc_loss *= self.lambda_bc
 
-            critic_loss = self._get_critic_loss(batch, self.buffer)
-            critic_loss = self.apply_losses([critic_loss], self.critic_optim)
+        return bc_loss, q_filter_num
 
-            actor_loss = self._get_actor_loss(batch)
-            actor_loss = self.apply_losses([actor_loss], self.actor_optim)
+    def _get_actor_loss(self, batch: PrioritizedExperienceTensorBatch) -> None:
+        if batch is None or self.critic is None:
+            return th.tensor(np.nan)
 
-            # Update target networks
-            self.critic_target.alpha_sync(self.tau_critic)
-            self.actor_target.alpha_sync(self.tau_actor)
+        # w_loss = th.mul(loss, batch.weights)
+        # mean_ = w_loss.mean()
+        # return mean_
 
-            # Keep track of losses
-            # self.critic_loss.append(critic_loss.detach().numpy())
-            # self.actor_loss.append(actor_loss.detach().numpy())
-            return {
-                "critic_loss": critic_loss.detach().numpy(),
-                "actor_loss": actor_loss.detach().numpy(),
-            }
+        loss = -self.critic(batch.obs, self.actor(batch.obs))
+        return loss.mean()
 
     def _get_critic_loss(
         self, batch: ExperienceTensorBatch, buffer: ReplayBuffer
-    ) -> th.Tensor:
-        if batch is None:
-            return th.tensor(np.nan)
+    ) -> Tuple[th.Tensor, th.Tensor]:
+        if batch is None or (self.critic is None and self.critic2 is None):
+            return th.tensor(np.nan), th.tensor(np.nan)
 
         weights = np.sqrt(batch.weights)
 
-        q_target = self.critic_target(batch.next_obs, self.actor_target(batch.next_obs))
-        q_target[batch.done] = 0.0
-        y = (batch.reward + q_target * self.gamma ** self.n_steps).detach()
-        q = self.critic(batch.obs, batch.action)
+        # Add noise to the actions
+        act_target = self.actor_target(batch.next_obs)
+        noise = th.rand_like(act_target) * 2 - 1  # Normal noise between [-1, 1]
+        act_target += noise * self.target_action_noise
+        act_target = act_target.clamp(-1, 1)
 
-        td_error = y - q
-        weighted_td_error = th.mul(td_error, weights)
+        # Critics training
+        q_critic1 = self.critic_target(batch.next_obs, act_target)
+        q_critic1[batch.done] = 0.0
+        if not self.critic2 is None:
+            q_critic2 = self.critic2_target(batch.next_obs, act_target)
+            q_critic2[batch.done] = 0.0
+        else:
+            q_critic2 = q_critic1
+
+        # Compute target with the minumim of both critics
+        y = (
+            batch.reward + th.min(q_critic1, q_critic2) * self.gamma ** self.n_steps
+        ).detach()
+
+        # Critic 1 training
+        q_target_1 = self.critic(batch.obs, batch.action)
+        td_error_1 = y - q_target_1
+        weighted_td_error_1 = th.mul(td_error_1, weights)
+        zero_t1 = th.zeros_like(weighted_td_error_1)
+        critic_loss_1 = th.nn.functional.mse_loss(weighted_td_error_1, zero_t1)
+
+        # Critic 2 training
+        if not self.critic2 is None:
+            q_target_2 = self.critic2(batch.obs, batch.action)
+            td_error_2 = y - q_target_2
+            weighted_td_error_2 = th.mul(td_error_2, weights)
+            zero_t2 = th.zeros_like(weighted_td_error_2)
+            critic_loss_2 = th.nn.functional.mse_loss(weighted_td_error_2, zero_t2)
+        else:
+            critic_loss_2 = th.tensor(np.nan)
 
         # Update PER priorities if needed
-        self.update_priorities(buffer, batch.indices, weighted_td_error)
+        self.update_priorities(buffer, batch.indices, weighted_td_error_1)
 
-        # Create a zero tensor to compare against
-        zero_tensor = th.zeros_like(weighted_td_error)
-
-        return th.nn.functional.mse_loss(weighted_td_error, zero_tensor)
-
-    def _get_actor_loss(self, batch: PrioritizedExperienceTensorBatch) -> None:
-        if batch is None:
-            return th.tensor(np.nan)
-
-        loss = -self.critic(batch.obs, self.actor(batch.obs))
-        w_loss = th.mul(loss, batch.weights)
-        mean_ = w_loss.mean()
-        return mean_
-
-        # return -self.critic(batch.obs, self.actor(batch.obs)).mean()
-
-    @property
-    def all_config_dics(self) -> Dict[str, Dict[str, str]]:
-        dic = super().all_config_dics
-        dic.update({"buffer": self.buffer.config_dic})
-        return dic
+        return critic_loss_1, critic_loss_2
 
     @staticmethod
-    def prepare_batch(
+    def update_priorities(
+        buffer: PrioritizedReplayBuffer,
+        indices: np.ndarray,
+        error: th.Tensor,
+    ) -> None:
+        if not isinstance(buffer, PrioritizedReplayBuffer):
+            return None
+
+        prio_np = th.abs(error).detach().cpu().numpy() + 1e-6
+        buffer.update_priorities(indices, prio_np)
+
+    @staticmethod
+    def _prepare_batch(
         buffer: ReplayBuffer,
         batch_size: int,
         norm_rewards: int = 0,
@@ -573,79 +655,291 @@ class DDPG(TrainableModel):
             obs, action, reward, done, next_obs, weights, indices
         )
 
+    def _get_experience_source(self, env: ShadedPVEnv, **kwargs) -> ExperienceSource:
+        """
+        Return a ExperienceSource with a mlp policy driven by the actor network of the class
+
+        Parameters:
+            - env: the environment to interact with
+            - kwargs: policy kwargs (see Policy class)
+        """
+        kwargs["net"] = self.actor
+        env_tracker = kwargs.pop("env_tracker", None)
+        policy = self.get_policy(policy_name="mlp", env=env, policy_kwargs=kwargs)
+        return ExperienceSource(
+            policy, env, self.gamma, self.n_steps, env_tracker=env_tracker
+        )
+
     @staticmethod
-    def fill_buffer(
+    def _get_buffer(
+        use_per: bool, **kwargs
+    ) -> Union[ReplayBuffer, PrioritizedReplayBuffer]:
+        """
+        Return a ReplayBuffer or a PrioritizedReplayBuffer with the specified kwargs
+
+        Parameters:
+            - use_per: use a prioritized replay buffer
+            - kwargs: buffer kwargs (see ReplayBuffer class)
+
+        """
+        if use_per:
+            return PrioritizedReplayBuffer(**kwargs)
+        return ReplayBuffer(**kwargs)
+
+    @staticmethod
+    def _apply_losses(
+        losses: Union[th.Tensor, Sequence[th.Tensor]],
+        optim: Optimizer,
+        apply: bool = True,
+    ) -> th.Tensor:
+        """ "
+        Computes the gradient of the sum of the provided loss tensors and performs a single optimization step.
+        If one tensor is NaN, its contribution is not taken into account.
+        If all tensors are NaN, the function returns a NaN tensor as the loss,
+        else returns the sum of the provided losses.
+
+        Parameters:
+            - losses: sequence of torch.Tensors
+            - optim: optimizer that performs the weights optimization
+            - apply: take the optimization step or just sum the losses
+        """
+
+        if not isinstance(losses, Sequence):
+            losses = tuple([losses])
+
+        losses = th.cat(tuple(l.unsqueeze(-1) for l in losses))
+
+        if all(th.isnan(losses)):
+            return th.tensor(np.nan)
+
+        mask = th.isnan(losses)
+        total_loss = th.sum(losses[~mask])
+
+        if apply and not optim is None:
+            optim.zero_grad()
+            total_loss.backward()
+            optim.step()
+
+        return total_loss
+
+    @staticmethod
+    def _fill_buffer(
         buffer: ReplayBuffer,
         exp_source: ExperienceSource,
         num_experiences: Optional[int] = None,
         description: Optional[str] = None,
-    ) -> int:
+    ) -> None:
+        """
+        Fill the buffer using the experience source specified.
+
+        Parameters:
+            - buffer: the buffer to store the experiences
+            - exp_source: the experience source that provides the experiences
+            - num_experiences: the number of experiences to add to the buffer.
+                Use `-1` to fill the buffer to its full capacity.
+        """
+        if num_experiences == 0:
+            return None
+
         if num_experiences == -1:
             num_experiences = buffer.capacity
 
         for _ in tqdm(
             range(num_experiences), desc=description, disable=description is None
         ):
-            exp = exp_source.play_n_steps()
+            # exp = exp_source.play_n_steps()
+            exp = exp_source.play_step()
             buffer.append(exp)
 
-        return num_experiences
-
-    @staticmethod
-    def update_priorities(
-        buffer: PrioritizedReplayBuffer,
-        indices: np.ndarray,
-        error: th.Tensor,
+    @classmethod
+    def run_from_grid(
+        cls,
+        dic: Dict[Any, Any],
+        total_timesteps: int,
+        val_every_timesteps: int = 0,
+        repeat_run: int = 1,
+        **kwargs,
     ) -> None:
-        if not isinstance(buffer, PrioritizedReplayBuffer):
-            return None
+        # Get a permutation of the dic if needed
+        gg = src.utils.grid_product(dic)
+        for dic in gg:
+            for _ in range(repeat_run):
+                model = cls(**dic, **kwargs)
+                model.run(total_timesteps, val_every_timesteps)
+                model.quit()
 
-        prio_np = th.abs(error).detach().cpu().numpy() + 1e-6
-        buffer.update_priorities(indices, prio_np)
 
-
-class DDPGExp(DDPG):
+class BC(TD3Experience):
     def __init__(
         self,
+        batch_size: int = 64,
+        demo_buffer_size: int = 10_000,
+        actor_lr: float = 1e-3,
+        actor_l2: float = 0.0,
+        n_steps: int = 1,
+        norm_rewards: int = 0,
+        train_steps: int = 1,
+        use_per: bool = False,
+        warmup_train_steps: int = 100,
+        lambda_bc: float = 1.0,
+        target_action_epsilon_noise: float = 0,
         env_kwargs: Optional[Dict[Any, Any]] = None,
         policy_kwargs: Optional[Dict[Any, Any]] = None,
         test_policy_kwargs: Optional[Dict[Any, Any]] = None,
         buffer_kwargs: Optional[Dict[Any, Any]] = None,
-        demo_buffer_kwargs: Optional[Dict[Any, Any]] = None,
+        buffer_demo_kwargs: Optional[Dict[Any, Any]] = None,
+    ):
+
+        env_kwargs = src.utils.new_dic(env_kwargs)
+        env_kwargs.setdefault("env_names", ["bc_train", "bc_test"])
+
+        super().__init__(
+            batch_size=batch_size,
+            buffer_size=0,
+            demo_buffer_size=demo_buffer_size,
+            actor_lr=actor_lr,
+            critic_lr=1e-3,
+            actor_l2=actor_l2,
+            critic_l2=0.0,
+            tau_critic=1e-3,
+            tau_actor=1e-3,
+            gamma=1.0,
+            n_steps=n_steps,
+            norm_rewards=norm_rewards,
+            train_steps=train_steps,
+            collect_steps=0,
+            prefill_buffer=0,
+            use_per=use_per,
+            warmup_train_steps=warmup_train_steps,
+            lambda_demo_critic=0,
+            lambda_demo_actor=0,
+            lambda_bc=lambda_bc,
+            use_q_filter=False,
+            policy_delay=1,
+            target_action_epsilon_noise=target_action_epsilon_noise,
+            env_kwargs=env_kwargs,
+            policy_kwargs=policy_kwargs,
+            test_policy_kwargs=test_policy_kwargs,
+            buffer_kwargs=buffer_kwargs,
+            buffer_demo_kwargs=buffer_demo_kwargs,
+        )
+
+        self.critic = None
+        self.critic2_optim = None
+        self.critic2 = None
+        self.critic2_optim = None
+
+    @property
+    def available_losses(self) -> Sequence[str]:
+        return ["bc_loss"]
+
+
+class TD3(TD3Experience):
+    def __init__(
+        self,
         batch_size: int = 64,
+        buffer_size: int = 50_000,
         actor_lr: float = 1e-4,
         critic_lr: float = 1e-3,
         actor_l2: float = 0.0,
         critic_l2: float = 0.0,
-        tau_critic: float = 1e-3,
-        tau_actor: float = 1e-3,
-        gamma: float = 0.99,
+        tau_critic: float = 1e-4,
+        tau_actor: float = 1e-4,
+        gamma: float = 0.1,
         n_steps: int = 1,
         norm_rewards: int = 0,
         train_steps: int = 1,
         collect_steps: int = 1,
-        prefill_buffer: int = 0,
+        prefill_buffer: int = 2000,
         use_per: bool = False,
-        warmup: int = 0,
-        lambda_bc: float = 0.1,
-        use_q_filter: bool = False,
+        warmup_train_steps: int = 1000,
+        policy_delay: int = 2,
+        target_action_epsilon_noise: float = 0.001,
+        env_kwargs: Dict[str, Any] = None,
+        policy_kwargs: Optional[Dict[Any, Any]] = None,
+        test_policy_kwargs: Optional[Dict[Any, Any]] = None,
+        buffer_kwargs: Optional[Dict[Any, Any]] = None,
+        buffer_demo_kwargs: Optional[Dict[Any, Any]] = None,
     ):
 
+        env_kwargs = src.utils.new_dic(env_kwargs)
+        env_kwargs.setdefault("env_names", ["td3_train", "td3_test"])
+
+        super().__init__(
+            batch_size=batch_size,
+            buffer_size=buffer_size,
+            demo_buffer_size=0,
+            actor_lr=actor_lr,
+            critic_lr=critic_lr,
+            actor_l2=actor_l2,
+            critic_l2=critic_l2,
+            tau_critic=tau_critic,
+            tau_actor=tau_actor,
+            gamma=gamma,
+            n_steps=n_steps,
+            norm_rewards=norm_rewards,
+            train_steps=train_steps,
+            collect_steps=collect_steps,
+            prefill_buffer=prefill_buffer,
+            use_per=use_per,
+            warmup_train_steps=warmup_train_steps,
+            lambda_demo_critic=0.0,
+            lambda_demo_actor=0.0,
+            lambda_bc=0.0,
+            use_q_filter=False,
+            policy_delay=policy_delay,
+            target_action_epsilon_noise=target_action_epsilon_noise,
+            env_kwargs=env_kwargs,
+            policy_kwargs=policy_kwargs,
+            test_policy_kwargs=test_policy_kwargs,
+            buffer_kwargs=buffer_kwargs,
+            buffer_demo_kwargs=buffer_demo_kwargs,
+        )
+
+    @property
+    def available_losses(self) -> Sequence[str]:
+        return ["critic_loss", "critic2_loss", "actor_loss"]
+
+
+class DDPGExperience(TD3Experience):
+    def __init__(
+        self,
+        batch_size: int = 64,
+        buffer_size: int = 50_000,
+        demo_buffer_size: int = 1200,
+        actor_lr: float = 1e-4,
+        critic_lr: float = 1e-3,
+        actor_l2: float = 0.0,
+        critic_l2: float = 0.0,
+        tau_critic: float = 1e-4,
+        tau_actor: float = 1e-4,
+        gamma: float = 0.1,
+        n_steps: int = 1,
+        norm_rewards: int = 0,
+        train_steps: int = 1,
+        collect_steps: int = 1,
+        prefill_buffer: int = 2000,
+        use_per: bool = False,
+        warmup_train_steps: int = 1000,
+        lambda_demo_critic: float = 0.1,
+        lambda_demo_actor: float = 0.1,
+        lambda_bc: float = 0.1,
+        use_q_filter: bool = False,
+        policy_delay: int = 2,
+        target_action_epsilon_noise: float = 0.001,
+        env_kwargs: Dict[str, Any] = None,
+        policy_kwargs: Optional[Dict[Any, Any]] = None,
+        test_policy_kwargs: Optional[Dict[Any, Any]] = None,
+        buffer_kwargs: Optional[Dict[Any, Any]] = None,
+        buffer_demo_kwargs: Optional[Dict[Any, Any]] = None,
+    ):
         env_kwargs = src.utils.new_dic(env_kwargs)
         env_kwargs.setdefault("env_names", ["ddpgexp_train", "ddpgexp_test"])
 
-        self.lambda_bc = lambda_bc
-        self.use_q_filter = use_q_filter
-
-        self.bc_loss = []
-        self.q_filter_num = []
-
         super().__init__(
-            env_kwargs=env_kwargs,
-            policy_kwargs=policy_kwargs,
-            buffer_kwargs=buffer_kwargs,
-            test_policy_kwargs=test_policy_kwargs,
             batch_size=batch_size,
+            buffer_size=buffer_size,
+            demo_buffer_size=demo_buffer_size,
             actor_lr=actor_lr,
             critic_lr=critic_lr,
             actor_l2=actor_l2,
@@ -659,424 +953,126 @@ class DDPGExp(DDPG):
             collect_steps=collect_steps,
             prefill_buffer=prefill_buffer,
             use_per=use_per,
-            warmup=warmup,
-        )
-
-        self.demo_buffer = (
-            ReplayBuffer(**demo_buffer_kwargs)
-            if not use_per
-            else PrioritizedReplayBuffer(**demo_buffer_kwargs)
-        )
-
-        # Fill demo buffer
-        po_policy = PerturbObservePolicy(self.env.action_space)
-        expert_exp_source = ExperienceSource(
-            po_policy, self.env, self.gamma, self.n_steps
-        )
-        demo_experiences = self.fill_buffer(
-            self.demo_buffer,
-            expert_exp_source,
-            num_experiences=-1,
-            description="Filling demo buffer",
-        )
-        self._env_steps += demo_experiences
-        self._update_losses(losses={}, repeat=demo_experiences)
-
-        self.save_config_dic()
-
-    @property
-    def _loss_names(self) -> Sequence[str]:
-        return super()._loss_names + ["bc_loss", "q_filter_num"]
-
-    def _train_nets(self, train_steps: int) -> Dict[str, numbers.Real]:
-        for _ in range(train_steps):
-            self._train_steps += 1
-
-            batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
-            demo_batch = self.prepare_batch(
-                self.demo_buffer, self.batch_size, self.norm_rewards
-            )
-
-            critic_loss_rl = self._get_critic_loss(batch, self.buffer)
-            critic_loss_demo = self._get_critic_loss(demo_batch, self.demo_buffer)
-            critic_loss = self.apply_losses(
-                [critic_loss_rl, critic_loss_demo], self.critic_optim
-            )
-
-            actor_loss_rl = self._get_actor_loss(batch)
-            actor_loss_demo = self._get_actor_loss(demo_batch)
-            actor_loss_bc, q_filter_num = self._get_bc_loss(demo_batch)
-            actor_loss = self.apply_losses(
-                [actor_loss_rl, actor_loss_demo, actor_loss_bc], self.actor_optim
-            )
-
-            # Update target networks
-            self.critic_target.alpha_sync(self.tau_critic)
-            self.actor_target.alpha_sync(self.tau_actor)
-
-            return {
-                "critic_loss": critic_loss.detach().numpy(),
-                "actor_loss": actor_loss.detach().numpy(),
-                "bc_loss": actor_loss_bc.detach().numpy(),
-                "q_filter_num": q_filter_num,
-            }
-
-    def _get_bc_loss(
-        self, demo_batch: ExperienceTensorBatch
-    ) -> Tuple[th.Tensor, numbers.Real]:
-        agent_action = self.actor(demo_batch.obs)
-
-        if self.use_q_filter:
-            q_expert = self.critic(demo_batch.obs, demo_batch.action)
-            q_agent = self.critic(demo_batch.obs, agent_action)
-            ind = (q_expert > q_agent).detach()
-            q_filter_num = sum(ind)
-        else:
-            ind = th.ones_like(agent_action, dtype=th.bool)
-            q_filter_num = 0
-
-        error = demo_batch.action[ind] - agent_action[ind]
-
-        demo_weights = np.sqrt(demo_batch.weights)
-        weighted_error = th.mul(error, demo_weights[ind])
-        zero_tensor = th.zeros_like(weighted_error)
-        bc_loss = th.nn.functional.mse_loss(weighted_error, zero_tensor)
-        bc_loss *= self.lambda_bc
-
-        return bc_loss, q_filter_num
-
-    def save_plot_losses(self) -> None:
-        super().save_plot_losses()
-        bc_loss = self.plot_loss("bc_loss", log_y=True)
-        bc_loss.savefig(self.path.joinpath("bc_loss.png"))
-        plt.close(bc_loss)
-
-        q_f = self.plot_loss("q_filter_num")
-        q_f.savefig(self.path.joinpath("q_filter_num.png"))
-        plt.close(q_f)
-
-
-class TD3(DDPG):
-    def __init__(
-        self,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        policy_kwargs: Optional[Dict[Any, Any]] = None,
-        buffer_kwargs: Optional[Dict[Any, Any]] = None,
-        test_policy_kwargs: Optional[Dict[Any, Any]] = None,
-        batch_size: int = 64,
-        actor_lr: float = 1e-4,
-        critic_lr: float = 1e-3,
-        actor_l2: float = 0.0,
-        critic_l2: float = 0.0,
-        tau_critic: float = 1e-3,
-        tau_actor: float = 1e-3,
-        gamma: float = 0.99,
-        n_steps: int = 1,
-        norm_rewards: int = 0,
-        train_steps: int = 1,
-        collect_steps: int = 1,
-        prefill_buffer: Optional[int] = None,
-        use_per: bool = False,
-        warmup: int = 0,
-        policy_delay: int = 2,
-        target_action_epsilon_noise: float = 0.001,
-    ):
-        env_kwargs = env_kwargs or {}
-        env_kwargs.setdefault("env_names", ["td3_train", "td3_test"])
-
-        self.policy_delay = policy_delay
-        self.target_epsilon_noise = target_action_epsilon_noise
-
-        self.critic2_loss = []
-
-        super().__init__(
-            env_kwargs=env_kwargs,
-            policy_kwargs=policy_kwargs,
-            buffer_kwargs=buffer_kwargs,
-            test_policy_kwargs=test_policy_kwargs,
-            batch_size=batch_size,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            actor_l2=actor_l2,
-            critic_l2=critic_l2,
-            tau_critic=tau_critic,
-            tau_actor=tau_actor,
-            gamma=gamma,
-            n_steps=n_steps,
-            norm_rewards=norm_rewards,
-            train_steps=train_steps,
-            collect_steps=collect_steps,
-            prefill_buffer=prefill_buffer,
-            use_per=use_per,
-            warmup=warmup,
-        )
-
-        self.critic2 = rl.create_mlp_critic(self.env, weight_init_fn=None)
-        self.critic2_optim = Adam(
-            self.critic2.parameters(),
-            lr=critic_lr,
-            weight_decay=critic_l2,
-        )
-        self.critic2_target = rl.TargetNet(self.critic2)
-        self.critic2_target.sync()
-
-        self.save_config_dic()
-
-    @property
-    def _loss_names(self) -> Sequence[str]:
-        return super()._loss_names + ["critic2_loss"]
-
-    def _get_critic_loss(
-        self, batch: ExperienceTensorBatch, buffer: ReplayBuffer
-    ) -> Tuple[th.Tensor, th.Tensor]:
-        if batch is None:
-            return th.tensor(np.nan), th.Tensor(np.nan)
-
-        weights = np.sqrt(batch.weights)
-
-        # Add noise to the actions
-        act_target = self.actor_target(batch.next_obs)
-        noise = th.rand_like(act_target) * 2 - 1  # Normal noise between [-1, 1]
-        act_target += noise * self.target_epsilon_noise
-        act_target = act_target.clamp(-1, 1)
-
-        # Critics training
-        q_critic1 = self.critic_target(batch.next_obs, act_target)
-        q_critic2 = self.critic2_target(batch.next_obs, act_target)
-        q_critic1[batch.done] = 0.0
-        q_critic2[batch.done] = 0.0
-
-        # Compute target with the minumim of both critics
-        y = (
-            batch.reward + th.min(q_critic1, q_critic2) * self.gamma ** self.n_steps
-        ).detach()
-
-        # Critic 1 training
-        q_target_1 = self.critic(batch.obs, batch.action)
-        td_error_1 = y - q_target_1
-        weighted_td_error_1 = th.mul(td_error_1, weights)
-        zero_tensor_1 = th.zeros_like(weighted_td_error_1)
-        critic_loss_1 = th.nn.functional.mse_loss(weighted_td_error_1, zero_tensor_1)
-
-        # Critic 2 training
-        q_target_2 = self.critic2(batch.obs, batch.action)
-        td_error_2 = y - q_target_2
-        weighted_td_error_2 = th.mul(td_error_2, weights)
-        zero_tensor_2 = th.zeros_like(weighted_td_error_2)
-        critic_loss_2 = th.nn.functional.mse_loss(weighted_td_error_2, zero_tensor_2)
-
-        # Update PER priorities if needed
-        self.update_priorities(buffer, batch.indices, weighted_td_error_1)
-
-        return critic_loss_1, critic_loss_2
-
-    def _train_nets(self, train_steps: int) -> Dict[str, numbers.Real]:
-        for _ in range(train_steps):
-            self._train_steps += 1
-
-            batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
-
-            critic_loss, critic2_loss = self._get_critic_loss(batch, self.buffer)
-            critic_loss = self.apply_losses([critic_loss], self.critic_optim)
-            critic2_loss = self.apply_losses([critic2_loss], self.critic2_optim)
-
-            if self._train_steps % self.policy_delay == 0:
-                actor_loss = self._get_actor_loss(batch)
-                actor_loss = self.apply_losses([actor_loss], self.actor_optim)
-                self.actor_target.alpha_sync(self.tau_actor)
-            else:
-                actor_loss = th.tensor(np.nan)
-
-            # Update target networks
-            self.critic_target.alpha_sync(self.tau_critic)
-            self.critic2_target.alpha_sync(self.tau_critic)
-
-            return {
-                "critic_loss": critic_loss.detach().numpy(),
-                "critic2_loss": critic2_loss.detach().numpy(),
-                "actor_loss": actor_loss.detach().numpy(),
-            }
-
-    def save_plot_losses(self) -> None:
-        super().save_plot_losses()
-        fig_critic_loss = self.plot_loss("critic2_loss", log_y=True)
-        fig_critic_loss.savefig(self.path.joinpath("critic2_loss.png"))
-        plt.close(fig_critic_loss)
-
-
-class TD3Exp(TD3):
-    def __init__(
-        self,
-        env_kwargs: Optional[Dict[Any, Any]] = None,
-        policy_kwargs: Optional[Dict[Any, Any]] = None,
-        buffer_kwargs: Optional[Dict[Any, Any]] = None,
-        demo_buffer_kwargs: Optional[Dict[Any, Any]] = None,
-        test_policy_kwargs: Optional[Dict[Any, Any]] = None,
-        batch_size: int = 64,
-        actor_lr: float = 1e-4,
-        critic_lr: float = 1e-3,
-        actor_l2: float = 0.0,
-        critic_l2: float = 0.0,
-        tau_critic: float = 1e-3,
-        tau_actor: float = 1e-3,
-        gamma: float = 0.99,
-        n_steps: int = 1,
-        norm_rewards: int = 0,
-        train_steps: int = 1,
-        collect_steps: int = 1,
-        prefill_buffer: Optional[int] = None,
-        use_per: bool = False,
-        warmup: int = 0,
-        policy_delay: int = 2,
-        target_action_epsilon_noise: float = 0.001,
-        lambda_bc: float = 1.0,
-        use_q_filter: bool = False,
-    ):
-        env_kwargs = src.utils.new_dic(env_kwargs)
-        env_kwargs.setdefault("env_names", ["td3exp_train", "td3exp_test"])
-
-        self.lambda_bc = lambda_bc
-        self.use_q_filter = use_q_filter
-
-        self.bc_loss = []
-        self.q_filter_num = []
-
-        self.demo_buffer = (
-            ReplayBuffer(**demo_buffer_kwargs)
-            if not use_per
-            else PrioritizedReplayBuffer(**demo_buffer_kwargs)
-        )
-
-        super().__init__(
-            env_kwargs=env_kwargs,
-            policy_kwargs=policy_kwargs,
-            buffer_kwargs=buffer_kwargs,
-            test_policy_kwargs=test_policy_kwargs,
-            batch_size=batch_size,
-            actor_lr=actor_lr,
-            critic_lr=critic_lr,
-            actor_l2=actor_l2,
-            critic_l2=critic_l2,
-            tau_critic=tau_critic,
-            tau_actor=tau_actor,
-            gamma=gamma,
-            n_steps=n_steps,
-            norm_rewards=norm_rewards,
-            train_steps=train_steps,
-            collect_steps=collect_steps,
-            prefill_buffer=prefill_buffer,
-            use_per=use_per,
-            warmup=warmup,
+            warmup_train_steps=warmup_train_steps,
+            lambda_demo_critic=lambda_demo_critic,
+            lambda_demo_actor=lambda_demo_actor,
+            lambda_bc=lambda_bc,
+            use_q_filter=use_q_filter,
             policy_delay=policy_delay,
             target_action_epsilon_noise=target_action_epsilon_noise,
+            env_kwargs=env_kwargs,
+            policy_kwargs=policy_kwargs,
+            test_policy_kwargs=test_policy_kwargs,
+            buffer_kwargs=buffer_kwargs,
+            buffer_demo_kwargs=buffer_demo_kwargs,
         )
 
-        # Fill demo buffer
-        po_policy = PerturbObservePolicy(self.env.action_space)
-        expert_exp_source = ExperienceSource(
-            po_policy, self.env, self.gamma, self.n_steps
-        )
-        demo_experiences = self.fill_buffer(
-            self.demo_buffer,
-            expert_exp_source,
-            num_experiences=-1,
-            description="Filling demo buffer",
-        )
-        self._env_steps += demo_experiences
-        self._update_losses(losses={}, repeat=demo_experiences)
-
-        self.save_config_dic()
+        self.critic2 = None
+        self.critic2_optim = None
 
     @property
-    def _loss_names(self) -> Sequence[str]:
-        return super()._loss_names + ["bc_loss", "q_filter_num"]
+    def available_losses(self) -> Sequence[str]:
+        return [
+            "critic_loss_rl",
+            "critic_loss_demo",
+            "critic_loss",
+            "actor_loss_rl",
+            "actor_loss",
+            "actor_loss_demo",
+            "bc_loss",
+            "q_filter",
+        ]
 
-    def _train_nets(self, train_steps: int) -> Dict[str, numbers.Real]:
-        for _ in range(train_steps):
-            self._train_steps += 1
 
-            batch = self.prepare_batch(self.buffer, self.batch_size, self.norm_rewards)
-            demo_batch = self.prepare_batch(
-                self.demo_buffer, self.batch_size, self.norm_rewards
-            )
+class DDPG(DDPGExperience):
+    def __init__(
+        self,
+        batch_size: int = 64,
+        buffer_size: int = 50_000,
+        actor_lr: float = 1e-4,
+        critic_lr: float = 1e-3,
+        actor_l2: float = 0.0,
+        critic_l2: float = 0.0,
+        tau_critic: float = 1e-4,
+        tau_actor: float = 1e-4,
+        gamma: float = 0.1,
+        n_steps: int = 1,
+        norm_rewards: int = 0,
+        train_steps: int = 1,
+        collect_steps: int = 1,
+        prefill_buffer: int = 2000,
+        use_per: bool = False,
+        warmup_train_steps: int = 1000,
+        policy_delay: int = 2,
+        target_action_epsilon_noise: float = 0.001,
+        env_kwargs: Dict[str, Any] = None,
+        policy_kwargs: Optional[Dict[Any, Any]] = None,
+        test_policy_kwargs: Optional[Dict[Any, Any]] = None,
+        buffer_kwargs: Optional[Dict[Any, Any]] = None,
+        buffer_demo_kwargs: Optional[Dict[Any, Any]] = None,
+    ):
 
-            critic_loss, critic2_loss = self._get_critic_loss(batch, self.buffer)
-            critic_loss_demo, critic2_loss_demo = self._get_critic_loss(
-                demo_batch, self.demo_buffer
-            )
-            critic_loss = self.apply_losses(
-                [critic_loss, critic_loss_demo], self.critic_optim
-            )
-            critic2_loss = self.apply_losses(
-                [critic2_loss, critic2_loss_demo], self.critic2_optim
-            )
+        env_kwargs = src.utils.new_dic(env_kwargs)
+        env_kwargs.setdefault("env_names", ["ddpg_train", "ddpg_test"])
 
-            actor_loss_bc, q_filter_num = self._get_bc_loss(demo_batch)
-            if self._train_steps % self.policy_delay == 0:
-                actor_loss_rl = self._get_actor_loss(batch)
-                actor_loss_demo = self._get_actor_loss(demo_batch)
-                actor_loss = self.apply_losses(
-                    [actor_loss_rl, actor_loss_demo, actor_loss_bc], self.actor_optim
-                )
+        super().__init__(
+            batch_size=batch_size,
+            buffer_size=buffer_size,
+            demo_buffer_size=0,
+            actor_lr=actor_lr,
+            critic_lr=critic_lr,
+            actor_l2=actor_l2,
+            critic_l2=critic_l2,
+            tau_critic=tau_critic,
+            tau_actor=tau_actor,
+            gamma=gamma,
+            n_steps=n_steps,
+            norm_rewards=norm_rewards,
+            train_steps=train_steps,
+            collect_steps=collect_steps,
+            prefill_buffer=prefill_buffer,
+            use_per=use_per,
+            warmup_train_steps=warmup_train_steps,
+            lambda_demo_critic=0,
+            lambda_demo_actor=0,
+            lambda_bc=0,
+            use_q_filter=False,
+            policy_delay=policy_delay,
+            target_action_epsilon_noise=target_action_epsilon_noise,
+            env_kwargs=env_kwargs,
+            policy_kwargs=policy_kwargs,
+            test_policy_kwargs=test_policy_kwargs,
+            buffer_kwargs=buffer_kwargs,
+            buffer_demo_kwargs=buffer_demo_kwargs,
+        )
 
-                self.actor_target.alpha_sync(self.tau_actor)
-            else:
-                actor_loss = th.tensor(np.nan)
-
-            # Update target networks
-            self.critic_target.alpha_sync(self.tau_critic)
-            self.critic2_target.alpha_sync(self.tau_critic)
-
-            return {
-                "critic_loss": critic_loss.detach().numpy(),
-                "critic2_loss": critic2_loss.detach().numpy(),
-                "actor_loss": actor_loss.detach().numpy(),
-                "bc_loss": actor_loss_bc.detach().numpy(),
-                "q_filter_num": q_filter_num,
-            }
-
-    def _get_bc_loss(
-        self, demo_batch: ExperienceTensorBatch
-    ) -> Tuple[th.Tensor, numbers.Real]:
-        agent_action = self.actor(demo_batch.obs)
-
-        if self.use_q_filter:
-            q1_expert = self.critic(demo_batch.obs, demo_batch.action)
-            q2_expert = self.critic2(demo_batch.obs, demo_batch.action)
-            q_expert = th.min(q1_expert, q2_expert)
-
-            q1_agent = self.critic(demo_batch.obs, agent_action)
-            q2_agent = self.critic2(demo_batch.obs, agent_action)
-            q_agent = th.min(q1_agent, q2_agent)
-            ind = (q_expert > q_agent).detach()
-            q_filter_num = sum(ind)
-        else:
-            ind = th.ones_like(agent_action, dtype=th.bool)
-            q_filter_num = 0
-
-        error = demo_batch.action[ind] - agent_action[ind]
-
-        demo_weights = np.sqrt(demo_batch.weights)
-        weighted_error = th.mul(error, demo_weights[ind])
-        zero_tensor = th.zeros_like(weighted_error)
-        bc_loss = th.nn.functional.mse_loss(weighted_error, zero_tensor)
-        bc_loss *= self.lambda_bc
-
-        return bc_loss, q_filter_num
-
-    def save_plot_losses(self) -> None:
-        super().save_plot_losses()
-        bc_loss = self.plot_loss("bc_loss", log_y=True)
-        bc_loss.savefig(self.path.joinpath("bc_loss.png"))
-        plt.close(bc_loss)
-
-        q_f = self.plot_loss("q_filter_num")
-        q_f.savefig(self.path.joinpath("q_filter_num.png"))
-        plt.close(q_f)
+    @property
+    def available_losses(self) -> Sequence[str]:
+        return ["critic_loss", "actor_loss"]
 
 
 if __name__ == "__main__":
     pass
+
+    # model = BC(demo_buffer_size=5000)
+    # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
+    # model.quit()
+
+    model = TD3Experience(use_q_filter=True)
+    model.learn(timesteps=1_000, val_every_timesteps=1_000)
+    model.quit()
+
+    # model = TD3()
+    # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
+    # model.quit()
+
+    # model = DDPGExperience()
+    # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
+    # model.quit()
+
+    # model = DDPG()
+    # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
+    # model.quit()
 
     # dic_ddpgexp = {
     #     "batch_size": 64,  # 64
@@ -1174,36 +1170,36 @@ if __name__ == "__main__":
     # }
     # TD3.run_from_grid(td3_dic, total_timesteps=30_000, val_every_timesteps=1_000)
 
-    dic = {
-        "batch_size": 64,  # 64
-        "actor_lr": 1e-4,  # 1e-3
-        "critic_lr": 1e-3,
-        "tau_critic": 1e-4,  # 1e-3
-        "tau_actor": 1e-4,  # 1e-4
-        "actor_l2": 0,
-        "critic_l2": 0,
-        "gamma": 0.1,  # 0.6
-        "n_steps": 1,
-        "norm_rewards": 0,
-        "train_steps": 1,  # 5
-        "collect_steps": 1,
-        "prefill_buffer": 600,
-        "use_per": False,  # True,
-        "warmup": 10_000,
-        "policy_delay": 2,
-        "target_action_epsilon_noise": 0.001,
-        "use_q_filter": True,
-        "lambda_bc": 0.1,
-        "buffer_kwargs": {
-            "capacity": 50_000,
-        },
-        "demo_buffer_kwargs": {
-            "capacity": 10_000,
-        },
-        "env_kwargs": {
-            "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
-        },
-    }
-    TD3Exp.run_from_grid(
-        dic, total_timesteps=30_000, val_every_timesteps=1_000, repeat_run=1
-    )
+    # dic = {
+    #     "batch_size": 64,  # 64
+    #     "actor_lr": 1e-4,  # 1e-3
+    #     "critic_lr": 1e-3,
+    #     "tau_critic": 1e-4,  # 1e-3
+    #     "tau_actor": 1e-4,  # 1e-4
+    #     "actor_l2": 0,
+    #     "critic_l2": 0,
+    #     "gamma": 0.1,  # 0.6
+    #     "n_steps": 1,
+    #     "norm_rewards": 0,
+    #     "train_steps": 1,  # 5
+    #     "collect_steps": 1,
+    #     "prefill_buffer": 600,
+    #     "use_per": False,  # True,
+    #     "warmup": 10_000,
+    #     "policy_delay": 2,
+    #     "target_action_epsilon_noise": 0.001,
+    #     "use_q_filter": True,
+    #     "lambda_bc": 0.1,
+    #     "buffer_kwargs": {
+    #         "capacity": 50_000,
+    #     },
+    #     "demo_buffer_kwargs": {
+    #         "capacity": 10_000,
+    #     },
+    #     "env_kwargs": {
+    #         "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
+    #     },
+    # }
+    # TD3Exp.run_from_grid(
+    #     dic, total_timesteps=30_000, val_every_timesteps=1_000, repeat_run=1
+    # )

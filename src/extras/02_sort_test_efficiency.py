@@ -5,7 +5,7 @@ import numpy as np
 # algs = ["PO", "DDPG", "TD3", "SAC", "A2C", "PPO"]
 path = Path("default/")
 # txts = path.glob("*test/efficiency.txt")
-txts = path.glob("*train/efficiency.txt")
+txts = path.glob("*test/efficiency.txt")
 
 effs = [f.read_text().strip().split("\n") for f in txts]
 
