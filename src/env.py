@@ -26,6 +26,7 @@ DEFAULT_STATES = (
     "duty_cycle",
     "delta_duty_cycle",
     "norm_power",
+    "norm_delta_power",
 )
 DEFAULT_LOG_STATES = (
     "date",
@@ -76,6 +77,7 @@ class EnvironmentTracker:
         self.counter_total_steps = 0
         self.counter_total_episodes = -1
         self._logged_at_episode = 0
+        self._logged_at_step = 0
 
         self._cum_reward = np.nan
         self.history = DefaultDict(list)
@@ -135,10 +137,15 @@ class EnvironmentTracker:
     def new_episode_available(self) -> bool:
         return self.counter_total_episodes > self._logged_at_episode
 
+    @property
+    def steps_elapsed(self) -> int:
+        return self.counter_total_steps - self._logged_at_step
+
     @new_episode_available.setter
     def new_episode_available(self, value: bool):
         if value == False:
             self._logged_at_episode = self.counter_total_episodes
+            self._logged_at_step = self.counter_total_steps
 
     def print_tracking(
         self, avg: int = 0, ignore: Optional[Sequence[str]] = None
@@ -191,12 +198,16 @@ class EnvironmentTracker:
 
     def save_plot_metrics(self, parent_path: Path) -> None:
         for k, seq in self.history.items():
-            fig = utils.plot_seq(
-                seq, ylabel=k, allow_ylog=not ("eff" in k or "reward" in k)
+            self._fig = utils.plot_seq(
+                seq,
+                ylabel=k,
+                allow_ylog=not (
+                    "eff" in k or "reward" in k or "q_filter" in k or "actor" in k
+                ),
             )
-            fig.savefig(parent_path.joinpath(f"{k}.png"))
-            fig.clf()
-            plt.close(fig)
+            self._fig.savefig(parent_path.joinpath(f"{k}.png"))
+            self._fig.clf()
+            plt.close(self._fig)
 
 
 class CustomEnv(gym.Env, abc.ABC):
@@ -470,7 +481,7 @@ class ShadedPVEnv(CustomEnv):
             with open(self.path.joinpath("efficiency.txt"), "a") as f:
                 f.write(f"{self.time}:{eff:.2f}\n")
 
-            self.env_tracker.track("efficiency", eff)
+            self.env_tracker.track("ep_efficiency", eff)
 
             # Rewards
             rew = self.env_tracker.history["ep_reward"][-1]
@@ -480,15 +491,25 @@ class ShadedPVEnv(CustomEnv):
     def _plot_state_df(self, name: str, states: Union[str, Sequence[str]]) -> None:
         """Plot states the states and save to a file"""
         df = self.to_dataframe(self.history_all, rename_cols=False)
-        ax = df.plot(y=list(states))
-        fig = ax.get_figure()
-        fig.savefig(self.path.joinpath(f"{self.time}_{name}.png"))
-        fig.clf()
-        plt.close(fig)
+        self._ax = df.plot(y=list(states))
+        self._fig = self._ax.get_figure()
+        self._fig.savefig(self.path.joinpath(f"{self.time}_{name}.png"))
+        self._fig.clf()
+        plt.close(self._fig)
 
     def quit(self) -> None:
         """Save the dataframe and exit the MATLAB engine"""
         self.reset()  # Save if anything must be saved
+
+        mean_eff = np.mean(self.env_tracker.history["ep_efficiency"])
+        with open(self.path.joinpath("efficiency.txt"), "a") as f:
+            f.write(f"mean:{mean_eff:.2f}\n")
+
+        # Rewards
+        mean_rew = np.mean(self.env_tracker.history["ep_reward"])
+        with open(self.path.joinpath("ep_reward.txt"), "a") as f:
+            f.write(f"mean:{mean_rew:.4f}\n")
+
         self.pvarray.quit()
 
     @property
@@ -499,7 +520,9 @@ class ShadedPVEnv(CustomEnv):
     @property
     def reward(self) -> numbers.Real:
         """Return the reward at each step"""
-        rew = self._history["norm_delta_power"][-1]
+        # rew = self._history["norm_delta_power"][-1]
+        rew = self._history["norm_power"][-1]
+        # rew = self._history["power"][-1] / self._history["optimum_power"][-1]
 
         if self._reward == 0:
             return rew

@@ -16,14 +16,20 @@ from matplotlib.figure import Figure
 from torch.optim import Adam, Optimizer
 from tqdm import tqdm, utils
 
+import gc
+
 import src.policy
 import src.utils
 from src import rl
 from src.env import DummyEnv, EnvironmentTracker, ShadedPVEnv
-from src.experience import (Experience, ExperienceSource,
-                            ExperienceTensorBatch,
-                            PrioritizedExperienceTensorBatch,
-                            PrioritizedReplayBuffer, ReplayBuffer)
+from src.experience import (
+    Experience,
+    ExperienceSource,
+    ExperienceTensorBatch,
+    PrioritizedExperienceTensorBatch,
+    PrioritizedReplayBuffer,
+    ReplayBuffer,
+)
 from src.policy import PerturbObservePolicy, Policy, RandomPolicy
 
 
@@ -241,15 +247,15 @@ class TD3Experience(Model):
         norm_rewards: int = 0,
         train_steps: int = 1,
         collect_steps: int = 1,
-        prefill_buffer: int = 2000,
+        prefill_buffer: int = 600,
         use_per: bool = False,
         warmup_train_steps: int = 1000,
-        lambda_demo_critic: float = 0.1,
-        lambda_demo_actor: float = 0.1,
-        lambda_bc: float = 0.1,
+        lambda_demo_critic: float = 1.0,
+        lambda_demo_actor: float = 1.0,
+        lambda_bc: float = 1.0,
         use_q_filter: bool = False,
-        policy_delay: int = 2,
-        target_action_epsilon_noise: float = 0.001,
+        policy_delay: int = 1,
+        target_action_epsilon_noise: float = 0.0,
         env_kwargs: Dict[str, Any] = None,
         policy_kwargs: Optional[Dict[Any, Any]] = None,
         test_policy_kwargs: Optional[Dict[Any, Any]] = None,
@@ -273,7 +279,7 @@ class TD3Experience(Model):
         self.prefill_buffer = prefill_buffer  # not used
         self.use_per = use_per
         self.warmup_train_steps = warmup_train_steps  # not used
-        self.lamda_demo_critic = lambda_demo_critic
+        self.lambda_demo_critic = lambda_demo_critic
         self.lambda_demo_actor = lambda_demo_actor
         self.lambda_bc = lambda_bc
         self.use_q_filter = use_q_filter
@@ -378,6 +384,28 @@ class TD3Experience(Model):
         dic = {k: np.nan for k in self.available_losses}
         for _ in range(self.prefill_buffer + self.buffer_demo.capacity):
             self._track(self.env_tracker, dic)
+        # And for the ep metrics
+        dic = {f"ep_{k}": np.nan for k in self.available_losses}
+        for _ in range(self.env_tracker.counter_total_episodes):
+            self._track(self.env_tracker, dic)
+
+        self.env_tracker.new_episode_available = False
+
+    def quit(self) -> None:
+        super().quit()
+        self.env_test.quit()
+
+        path = Path("default/log.txt")
+        et = self.env_tracker
+        ett = self.env_tracker_test
+        with open(path, "a") as f:
+            f.write(f"{self.__class__.__name__}\n")
+            f.write(f"Train episodes: {et.counter_total_episodes}\n")
+            f.write(f"Train mean ep eff: {np.mean(et.history['ep_efficiency'])}\n")
+            f.write(f"Train mean ep rew: {np.mean(et.history['ep_reward'])}\n")
+            f.write(f"Test episodes: {ett.counter_total_episodes}\n")
+            f.write(f"Test mean ep eff: {np.mean(ett.history['ep_efficiency'])}\n")
+            f.write(f"Test mean ep rew: {np.mean(ett.history['ep_reward'])}\n\n")
 
     def learn(
         self,
@@ -387,6 +415,9 @@ class TD3Experience(Model):
         log_interval: int = 1,
         plot_every_timesteps: int = 0,
     ):
+
+        timesteps = timesteps + self.warmup_train_steps
+
         val_every_timesteps = val_every_timesteps or timesteps + 1
         plot_every_timesteps = plot_every_timesteps or timesteps
 
@@ -394,7 +425,10 @@ class TD3Experience(Model):
             # ts_counter = self.env_tracker.counter_total_steps
 
             # - - - Testing
-            if ts_counter % val_every_timesteps == 0:
+            if (
+                ts_counter % val_every_timesteps == 0
+                and ts_counter > self.warmup_train_steps
+            ):
                 for _ in range(n_eval_episodes):
                     self.exp_source_test.play_episode()
 
@@ -404,13 +438,27 @@ class TD3Experience(Model):
 
             # - - - Logging
             if self.env_tracker.new_episode_available:
-                self.env_tracker.new_episode_available = False
                 print(f"\nEval num_timesteps={ts_counter}")
                 print(f"training_steps={self._counter_train_steps}")
                 self.env_tracker.print_tracking(
                     avg=log_interval, ignore=["loss", "filter"]
                 )
                 print()
+
+                # Loss per episode
+                dic = {}
+                for k, lst in self.env_tracker.history.items():
+                    if k.startswith("ep"):
+                        continue
+                    arr = np.array(lst[-self.env_tracker.steps_elapsed :])
+                    mask = np.isfinite(arr)
+                    if all(~mask):
+                        dic[f"ep_{k}"] = np.nan
+                    else:
+                        dic[f"ep_{k}"] = arr[mask].mean()
+                self._track(self.env_tracker, dic)
+
+                self.env_tracker.new_episode_available = False
 
             # - - - Training
             for _ in range(self.train_steps_per_timestep):
@@ -419,14 +467,15 @@ class TD3Experience(Model):
             self._track(self.env_tracker, losses)  # Keep only the last set of losses
 
             # - - - Collect
-            self._fill_buffer(
-                self.buffer,
-                self.exp_source,
-                num_experiences=self.collect_steps_per_timestep,
-            )
+            if ts_counter > self.warmup_train_steps:
+                self._fill_buffer(
+                    self.buffer,
+                    self.exp_source,
+                    num_experiences=self.collect_steps_per_timestep,
+                )
 
             # - - - Plotting
-            if ts_counter % plot_every_timesteps == 0:
+            if ts_counter % plot_every_timesteps == 0 or ts_counter == timesteps:
                 self.env_tracker.save_plot_metrics(self.path_plots)
                 self.env_tracker.save_all_as_csv(self.path_csvs)
                 self.env_tracker_test.save_plot_metrics(self.path_plots_test)
@@ -472,12 +521,12 @@ class TD3Experience(Model):
         critics_loss = self._get_critic_loss(batch, self.buffer)
         critics_loss_demo = self._get_critic_loss(batch_demo, self.buffer_demo)
         critic_loss_rl = critics_loss[0]
-        critic_loss_demo = critics_loss_demo[0] * self.lamda_demo_critic
+        critic_loss_demo = critics_loss_demo[0] * self.lambda_demo_critic
         critic_loss = self._apply_losses(
             [critic_loss_rl, critic_loss_demo], self.critic_optim
         )
         critic2_loss_rl = critics_loss[1]
-        critic2_loss_demo = critics_loss_demo[1] * self.lamda_demo_critic
+        critic2_loss_demo = critics_loss_demo[1] * self.lambda_demo_critic
         critic2_loss = self._apply_losses(
             [critic2_loss_rl, critic2_loss_demo], self.critic2_optim
         )
@@ -521,10 +570,9 @@ class TD3Experience(Model):
             q_expert = self.critic(demo_batch.obs, demo_batch.action)
             q_agent = self.critic(demo_batch.obs, agent_action)
             ind = (q_expert > q_agent).detach()
-            q_filter_num = sum(ind)
         else:
             ind = th.ones_like(agent_action, dtype=th.bool)
-            q_filter_num = 0
+        q_filter_num = sum(ind)
 
         error = demo_batch.action[ind] - agent_action[ind]
 
@@ -1052,15 +1100,50 @@ class DDPG(DDPGExperience):
 
 
 if __name__ == "__main__":
-    pass
+    from src.noise import GaussianNoise
+    from src.schedule import LinearSchedule
+    import gc
+
+    explore_policy_kwargs = {
+        "noise": GaussianNoise(0, 0.1),
+        "schedule": LinearSchedule(max_steps=1_000),
+        "decrease_noise": True,
+    }
+    explore_policy_kwargs2 = {
+        "noise": GaussianNoise(0, 0.3),
+        "schedule": LinearSchedule(max_steps=10_000),
+        "decrease_noise": True,
+    }
 
     # model = BC(demo_buffer_size=5000)
     # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
     # model.quit()
 
-    model = TD3Experience(use_q_filter=True)
-    model.learn(timesteps=1_000, val_every_timesteps=1_000)
-    model.quit()
+    for _ in range(1):
+        model = TD3Experience(
+            demo_buffer_size=3000,
+            use_q_filter=True,
+            warmup_train_steps=3000,
+            prefill_buffer=3000,
+        )
+        model.learn(
+            timesteps=20_000, val_every_timesteps=1_000, plot_every_timesteps=5000
+        )
+        model.quit()
+        del model
+        gc.collect()
+
+    for _ in range(1):
+        model = TD3(
+            warmup_train_steps=3000,
+            prefill_buffer=3000,
+        )
+        model.learn(
+            timesteps=20_000, val_every_timesteps=1_000, plot_every_timesteps=5000
+        )
+        model.quit()
+        del model
+        gc.collect()
 
     # model = TD3()
     # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
@@ -1070,8 +1153,13 @@ if __name__ == "__main__":
     # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
     # model.quit()
 
-    # model = DDPG()
-    # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
+    # model = DDPG(
+    #     prefill_buffer=600,
+    #     warmup_train_steps=0,
+    #     policy_kwargs=explore_policy_kwargs2,
+    #     target_action_epsilon_noise=0.0,
+    # )
+    # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=5000)
     # model.quit()
 
     # dic_ddpgexp = {

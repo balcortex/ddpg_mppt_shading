@@ -206,7 +206,10 @@ def new_dic(dic: Optional[Dict[Any, Any]]) -> Dict[Any, Any]:
 
 
 def plot_seq(
-    seq: Sequence[numbers.Real], ylabel: str = "", allow_ylog: bool = True
+    seq: Sequence[numbers.Real],
+    ylabel: str = "",
+    allow_ylog: bool = True,
+    show_mean: bool = True,
 ) -> Figure:
     """
     Plot the sequence using matplotlib
@@ -233,6 +236,10 @@ def plot_seq(
     # ax.plot(np.arange(len(y))[mask], y[mask])
     ax.plot(np.arange(len(y)), y)
     ax.set_ylabel(ylabel)
+
+    if show_mean:
+        mean_ = np.mean(y[mask])
+        ax.plot((0, len(y)), (mean_, mean_))
 
     if min_ > 0 and allow_ylog:
         ax.set_yscale("log")
