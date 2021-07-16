@@ -1,0 +1,80 @@
+TD3Experience
+Train episodes: 55
+Train mean ep eff: 95.46878706908235
+Train mean ep rew: 0.04134955487234018
+Test episodes: 30
+Test mean ep eff: 86.63040970488458
+Test mean ep rew: 0.02351113347690583
+
+TD3
+Train episodes: 55
+Train mean ep eff: 89.68858807773093
+Train mean ep rew: 0.008778369700994494
+Test episodes: 30
+Test mean ep eff: 97.58374648148306
+Test mean ep rew: 0.01786833121686256
+
+TD3Experience
+Train episodes: 55
+Train mean ep eff: 93.81891088385166
+Train mean ep rew: 0.0317800217883864
+Test episodes: 30
+Test mean ep eff: 87.71728858545849
+Test mean ep rew: 0.022848026592220357
+
+TD3
+Train episodes: 55
+Train mean ep eff: 89.99972891579273
+Train mean ep rew: 0.002744051265608313
+Test episodes: 30
+Test mean ep eff: 97.77640738838427
+Test mean ep rew: 0.01881697653647396
+
+TD3Experience
+Train episodes: 55
+Train mean ep eff: 93.68425906678576
+Train mean ep rew: 0.03047230707792306
+Test episodes: 30
+Test mean ep eff: 87.22008468895872
+Test mean ep rew: 0.02273919587480795
+
+TD3
+Train episodes: 55
+Train mean ep eff: 88.81937240931653
+Train mean ep rew: 0.006203265716244538
+Test episodes: 30
+Test mean ep eff: 87.13243837205037
+Test mean ep rew: 0.01744287120588544
+
+TD3Experience
+Train episodes: 55
+Train mean ep eff: 94.48527693651978
+Train mean ep rew: 0.03468938877451575
+Test episodes: 30
+Test mean ep eff: 86.65258917610898
+Test mean ep rew: 0.01816448922587045
+
+TD3
+Train episodes: 55
+Train mean ep eff: 90.05659454256065
+Train mean ep rew: 0.02353744616520319
+Test episodes: 30
+Test mean ep eff: 97.03983395311161
+Test mean ep rew: 0.016331863305713543
+
+TD3Experience
+Train episodes: 55
+Train mean ep eff: 93.22152245937855
+Train mean ep rew: 0.029024966747544602
+Test episodes: 30
+Test mean ep eff: 91.2877300308207
+Test mean ep rew: 0.021449098446601405
+
+TD3
+Train episodes: 55
+Train mean ep eff: 88.93539980464769
+Train mean ep rew: -0.012385715486650595
+Test episodes: 30
+Test mean ep eff: 87.47502854910356
+Test mean ep rew: 0.020874470916532207
+

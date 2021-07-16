@@ -137,8 +137,5 @@ slprj
 *.autosave
 
 # project
-default
-pv_boost_avg_rload.txt
-src/matlab/pv_boost_avg_rload_mpp_2.txt
-src/matlab/pv_boost_avg_rload_mpp_4.txt
-src/matlab/pv_boost_avg_rload_mpp.txt
+/default/*
+!/default/log.txt

@@ -169,5 +169,5 @@ if __name__ == "__main__":
         irradiance=[200, 400, 600, 800, 1000],
         amb_temperature=[25],
         days_train=300,
-        days_test=1,
+        days_test=60,
     )
