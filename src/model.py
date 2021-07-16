@@ -242,7 +242,7 @@ class TD3Experience(Model):
         critic_l2: float = 0.0,
         tau_critic: float = 1e-4,
         tau_actor: float = 1e-4,
-        gamma: float = 0.1,
+        gamma: float = 0.01,
         n_steps: int = 1,
         norm_rewards: int = 0,
         train_steps: int = 1,
@@ -1119,31 +1119,27 @@ if __name__ == "__main__":
     # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
     # model.quit()
 
-    for _ in range(1):
+    for _ in range(5):
         model = TD3Experience(
-            demo_buffer_size=3000,
+            demo_buffer_size=2900,
             use_q_filter=True,
             warmup_train_steps=3000,
-            prefill_buffer=3000,
+            prefill_buffer=100,
+            train_steps=1,
+            policy_delay=1,
         )
         model.learn(
-            timesteps=20_000, val_every_timesteps=1_000, plot_every_timesteps=5000
+            timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=5000
         )
         model.quit()
-        del model
-        gc.collect()
 
-    for _ in range(1):
         model = TD3(
             warmup_train_steps=3000,
             prefill_buffer=3000,
+            train_steps=3,
         )
-        model.learn(
-            timesteps=20_000, val_every_timesteps=1_000, plot_every_timesteps=5000
-        )
+        model.learn(timesteps=30_000, val_every_timesteps=1_000)
         model.quit()
-        del model
-        gc.collect()
 
     # model = TD3()
     # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)

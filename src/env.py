@@ -19,14 +19,20 @@ from src.pvsys import ShadedArray, SimulinkModelOutput
 
 DEFAULT_WEATHER_PATH = Path("data/synthetic_weather_test.csv")
 DEFAULT_STATES = (
-    "mod1_voltage",
-    "mod2_voltage",
-    "mod3_voltage",
-    "mod4_voltage",
+    # "norm_delta_mod1_voltage",
+    # "norm_delta_mod2_voltage",
+    # "norm_delta_mod3_voltage",
+    # "norm_delta_mod4_voltage",
+    "norm_mod1_voltage",
+    "norm_mod2_voltage",
+    "norm_mod3_voltage",
+    "norm_mod4_voltage",
+    # "norm_voltage",
+    # "norm_delta_voltage",
     "duty_cycle",
     "delta_duty_cycle",
     "norm_power",
-    "norm_delta_power",
+    # "norm_delta_power",
 )
 DEFAULT_LOG_STATES = (
     "date",
@@ -47,9 +53,16 @@ DEFAULT_LOG_STATES = (
 DEFAULT_PLOT_STATES = {
     # key -> filename, val -> plot from df
     # "power": ("power", "optimum_power"),
-    # "duty_cycle": ("duty_cycle", "optimum_duty_cycle"),
+    "duty_cycle": ("duty_cycle", "optimum_duty_cycle"),
 }
-DEFAULT_NORM_DIC = {"power": 200, "voltage": 36}
+DEFAULT_NORM_DIC = {
+    "power": 200,
+    "voltage": 36,
+    "mod1_voltage": 9,
+    "mod2_voltage": 9,
+    "mod3_voltage": 9,
+    "mod4_voltage": 9,
+}
 DEFAULT_LOG_PATH = Path("default")
 DEFAULT_REWARD = 0
 DEFAULT_WEATHER_PATH_NAMES = ["train_1_4_0.5", "test_1_4_0.5"]
@@ -520,8 +533,8 @@ class ShadedPVEnv(CustomEnv):
     @property
     def reward(self) -> numbers.Real:
         """Return the reward at each step"""
-        # rew = self._history["norm_delta_power"][-1]
-        rew = self._history["norm_power"][-1]
+        rew = self._history["norm_delta_power"][-1]
+        # rew = self._history["norm_power"][-1]
         # rew = self._history["power"][-1] / self._history["optimum_power"][-1]
 
         if self._reward == 0:
