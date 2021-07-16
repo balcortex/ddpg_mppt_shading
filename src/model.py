@@ -411,14 +411,17 @@ class TD3Experience(Model):
         self,
         timesteps: int,
         val_every_timesteps: int = 0,
-        n_eval_episodes: int = 1,
+        n_eval_episodes: int = -1,
         log_interval: int = 1,
         plot_every_timesteps: int = 0,
     ):
 
         timesteps = timesteps + self.warmup_train_steps
 
-        val_every_timesteps = val_every_timesteps or timesteps + 1
+        if n_eval_episodes == -1:
+            n_eval_episodes = self.env_test.available_weather_days
+
+        val_every_timesteps = val_every_timesteps or timesteps
         plot_every_timesteps = plot_every_timesteps or timesteps
 
         for ts_counter in tqdm(range(1, timesteps + 1), desc="Training"):
@@ -1099,6 +1102,61 @@ class DDPG(DDPGExperience):
         return ["critic_loss", "actor_loss"]
 
 
+class PO(DDPGExperience):
+    def __init__(
+        self,
+        demo_buffer_size: int = 30_000,
+        gamma: float = 0.01,
+        n_steps: int = 1,
+        norm_rewards: int = 0,
+        env_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        env_kwargs = src.utils.new_dic(env_kwargs)
+        env_kwargs.setdefault("env_names", ["po_train", "po_test"])
+        super().__init__(
+            batch_size=64,
+            buffer_size=0,
+            demo_buffer_size=demo_buffer_size,
+            actor_lr=1e-3,
+            critic_lr=1e-3,
+            actor_l2=0.0,
+            critic_l2=0.0,
+            tau_critic=1e-4,
+            tau_actor=1e-4,
+            gamma=gamma,
+            n_steps=n_steps,
+            norm_rewards=norm_rewards,
+            train_steps=1,
+            collect_steps=1,
+            prefill_buffer=0,
+            use_per=False,
+            warmup_train_steps=0,
+            lambda_demo_critic=1.0,
+            lambda_demo_actor=1.0,
+            lambda_bc=1.0,
+            use_q_filter=False,
+            policy_delay=1,
+            target_action_epsilon_noise=0.0,
+            env_kwargs=env_kwargs,
+            policy_kwargs=None,
+            test_policy_kwargs=None,
+            buffer_kwargs=None,
+            buffer_demo_kwargs=None,
+        )
+
+        self.exp_source_test = ExperienceSource(
+            PerturbObservePolicy(self.env_test.action_space),
+            self.env_test,
+            self.gamma,
+            self.n_steps,
+            env_tracker=self.env_tracker_test,
+        )
+
+    @property
+    def available_losses(self) -> Sequence[str]:
+        return []
+
+
 if __name__ == "__main__":
     from src.noise import GaussianNoise
     from src.schedule import LinearSchedule
@@ -1119,26 +1177,25 @@ if __name__ == "__main__":
     # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
     # model.quit()
 
+    # model = PO(demo_buffer_size=60_000)
+    # model.learn(timesteps=1)
+    # model.quit()
+
     for _ in range(5):
         model = TD3Experience(
             demo_buffer_size=2900,
             use_q_filter=True,
             warmup_train_steps=3000,
             prefill_buffer=100,
-            train_steps=1,
-            policy_delay=1,
         )
-        model.learn(
-            timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=5000
-        )
+        model.learn(timesteps=57_000)
         model.quit()
 
         model = TD3(
             warmup_train_steps=3000,
             prefill_buffer=3000,
-            train_steps=3,
         )
-        model.learn(timesteps=30_000, val_every_timesteps=1_000)
+        model.learn(timesteps=57_000)
         model.quit()
 
     # model = TD3()

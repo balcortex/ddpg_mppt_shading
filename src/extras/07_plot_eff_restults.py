@@ -70,20 +70,24 @@ import numpy as np
 
 a = merged["td3experience"]["test_mean_ep_eff"]
 b = merged["td3"]["test_mean_ep_eff"]
+c = merged["po"]["test_mean_ep_eff"]
 plt.plot(a, label="td3experience")
 plt.plot(b, label="td3")
 plt.plot((0, len(a)), (np.mean(a),) * 2, label="td3experience_mean")
 plt.plot((0, len(b)), (np.mean(b),) * 2, label="td3_mean")
+plt.plot((0, len(a)), (np.mean(c),) * 2, label="po_mean")
 
 plt.legend()
 plt.show()
 
 a = merged["td3experience"]["train_mean_ep_eff"]
 b = merged["td3"]["train_mean_ep_eff"]
+c = merged["po"]["train_mean_ep_eff"]
 plt.plot(a, label="td3experience")
 plt.plot(b, label="td3")
 plt.plot((0, len(a)), (np.mean(a),) * 2, label="td3experience_mean")
 plt.plot((0, len(b)), (np.mean(b),) * 2, label="td3_mean")
+plt.plot((0, len(a)), (np.mean(c),) * 2, label="po_mean")
 
 plt.legend()
 plt.show()
