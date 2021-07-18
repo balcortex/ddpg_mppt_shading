@@ -69,12 +69,12 @@ class Model(ABC):
     #     self._env_steps += self.exp_source.n_steps
     #     return self.exp_source.play_n_steps()
 
-    def save_log(self) -> Path:
-        path = self.path.joinpath("log.txt")
-        with open(path, "w") as f:
-            f.write(f"Environment steps: {self._env_steps}\n")
+    # def save_log(self) -> Path:
+    #     path = self.path.joinpath("log.txt")
+    #     with open(path, "w") as f:
+    #         f.write(f"Environment steps: {self._env_steps}\n")
 
-        return path
+    #     return path
 
     def save_config_dic(self) -> None:
         config_path = self.path.joinpath("config.json")
@@ -87,7 +87,7 @@ class Model(ABC):
             "self": self.config_dic,
             "policy": self.policy.config_dic,
             "env": self.env.config_dic,
-            "exp_sorce": self.exp_source.config_dic,
+            "exp_source": self.exp_source.config_dic,
         }
         return dic
 
@@ -172,7 +172,6 @@ class StaticModel(Model):
             model = cls(**dic, **kwargs)
             for _ in tqdm(range(episodes), desc="Playing episodes"):
                 model.play_episode()
-            model.save_log()
             model.quit()
 
 
@@ -335,8 +334,8 @@ class TD3Experience(Model):
 
         # - - - Loss tracking
         self._counter_train_steps = 0
-        self.losses_env_steps = defaultdict(list)
-        self.losses_train_steps = defaultdict(list)
+        # self.losses_env_steps = defaultdict(list)
+        # self.losses_train_steps = defaultdict(list)
 
         # - - - Experience sources
         self.env_tracker = self.env.env_tracker
@@ -390,6 +389,8 @@ class TD3Experience(Model):
             self._track(self.env_tracker, dic)
 
         self.env_tracker.new_episode_available = False
+
+        self.save_config_dic()
 
     def quit(self) -> None:
         super().quit()
@@ -503,6 +504,10 @@ class TD3Experience(Model):
     @property
     def available_metrics(self) -> Sequence[str]:
         return ["efficiency", "ep_reward"]
+
+    @property
+    def policy(self) -> Policy:
+        return getattr(self.exp_source, "policy", None)
 
     @staticmethod
     def _track(

@@ -1,8 +1,24 @@
-from collections import defaultdict
 import numbers
-import copy
+from collections import defaultdict
 from pathlib import Path
-from typing import Dict, NamedTuple, Sequence, Any
+from typing import Any, Dict, Sequence
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.figure import Figure
+
+PATH = Path("default/log.txt")
+
+MAPPING = {
+    "test_mean_ep_eff": {
+        "ylabel": "Tracking efficiency (%)",
+        "title": "Mean episode efficiency on the Test Set",
+    },
+    "train_mean_ep_eff": {
+        "ylabel": "Mean episode efficiency (%)",
+        "title": "Mean episode efficiency on the Training Set",
+    },
+}
 
 
 def parse_experiment(txt: str) -> Dict[str, Any]:
@@ -31,27 +47,16 @@ def parse_experiment(txt: str) -> Dict[str, Any]:
     return dic
 
 
-# def merge_exps(exps: Sequence[Dict[str, Any]]) -> Sequence[Dict[str, Any]]:
-#     dic_total = {}
-#     for exp in exps:
-#         exp = dict(exp) # Make a copy
-#         name = exp.pop("name")
-#         d = dic_total.get(name, defaultdict(list))
-#         for k, v in exp.items():
-#             d[k].append(v)
-
-#         dic_total[name] = d
-
-#     return dic_total
-
-
 def merge_exps(
     exps: Sequence[Dict[str, Any]]
 ) -> Dict[str, Dict[str, Sequence[numbers.Real]]]:
+    """
+    Merge the results of a sequence of experiments into a dictinary
+    """
     d = defaultdict(lambda: defaultdict(list))
     for exp in exps:
         exp = dict(exp)  # Make a copy
-        name = exp.pop("name").lower()
+        name = exp.pop("name").lower().replace("experience", "exp")
 
         for k, v in exp.items():
             d[name][k].append(v)
@@ -60,34 +65,59 @@ def merge_exps(
     return {k: {k1: v1 for k1, v1 in v.items()} for k, v in d.items()}
 
 
-PATH = Path("default/log.txt")
+def merged_max(dic: Dict[str, Dict[str, Sequence[numbers.Real]]]) -> int:
+    """Return the maximum number of experiments in the merged dict"""
+    max_ = 0
+    for k, v in dic.items():
+        for k_, v_ in v.items():
+            max_ = max(max_, len(v_))
+
+    return max_
+
+
+def plot_bar_mean(
+    dic: Dict[str, Dict[str, Sequence[numbers.Real]]], feature: str
+) -> Figure:
+    fig, ax = plt.subplots()
+    for i, (k, v) in enumerate(dic.items()):
+        arr = np.array(v[feature])
+        ax.bar(i, arr.mean(), yerr=arr.std(), capsize=10)
+        ax.text(i - 0.25, 40, f"{arr.mean():0.2f}")
+    ax.set_xticks(range(len(dic.keys())))
+    ax.set_xticklabels(dic.keys())
+    ax.set_ylabel(MAPPING[feature]["ylabel"])
+    ax.set_title(MAPPING[feature]["title"])
+
+    return fig
+
+
+def plot_line(
+    dic: Dict[str, Dict[str, Sequence[numbers.Real]]],
+    feature: str,
+    include_mean: bool = True,
+) -> Figure:
+    fig, ax = plt.subplots()
+    for k, v in dic.items():
+        arr = np.array(v[feature])
+        if len(arr) == 1:
+            mean_ = arr.mean()
+            ax.plot((1, merged_max(dic)), (mean_,) * 2, ":", label=f"{k}_mean")
+            continue
+        ax.plot(range(1, len(arr) + 1), arr, label=k)
+        if include_mean:
+            mean_ = arr.mean()
+            ax.plot((1, merged_max(dic)), (mean_,) * 2, ":", label=f"{k}_mean")
+    ax.set_ylabel(MAPPING[feature]["ylabel"])
+    ax.set_title(MAPPING[feature]["title"])
+    ax.legend()
+
+    return fig
+
 
 exps = [parse_experiment(exp) for exp in PATH.read_text().split("\n\n")]
 merged = merge_exps(exps)
 
-import matplotlib.pyplot as plt
-import numpy as np
-
-a = merged["td3experience"]["test_mean_ep_eff"]
-b = merged["td3"]["test_mean_ep_eff"]
-c = merged["po"]["test_mean_ep_eff"]
-plt.plot(a, label="td3experience")
-plt.plot(b, label="td3")
-plt.plot((0, len(a)), (np.mean(a),) * 2, label="td3experience_mean")
-plt.plot((0, len(b)), (np.mean(b),) * 2, label="td3_mean")
-plt.plot((0, len(a)), (np.mean(c),) * 2, label="po_mean")
-
-plt.legend()
-plt.show()
-
-a = merged["td3experience"]["train_mean_ep_eff"]
-b = merged["td3"]["train_mean_ep_eff"]
-c = merged["po"]["train_mean_ep_eff"]
-plt.plot(a, label="td3experience")
-plt.plot(b, label="td3")
-plt.plot((0, len(a)), (np.mean(a),) * 2, label="td3experience_mean")
-plt.plot((0, len(b)), (np.mean(b),) * 2, label="td3_mean")
-plt.plot((0, len(a)), (np.mean(c),) * 2, label="po_mean")
-
-plt.legend()
-plt.show()
+plot_bar_mean(merged, "test_mean_ep_eff")
+plot_bar_mean(merged, "train_mean_ep_eff")
+plot_line(merged, "test_mean_ep_eff", include_mean=False)
+plot_line(merged, "train_mean_ep_eff", include_mean=False)

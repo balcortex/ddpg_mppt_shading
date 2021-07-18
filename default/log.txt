@@ -6,163 +6,291 @@ Test episodes: 60
 Test mean ep eff: 94.53428964732625
 Test mean ep rew: 0.036513971067102725
 
-TD3Experience
+DDPG
 Train episodes: 100
-Train mean ep eff: 95.31805651052282
-Train mean ep rew: 0.05764885402422893
+Train mean ep eff: 94.05374711365255
+Train mean ep rew: 0.036468839065499095
 Test episodes: 60
-Test mean ep eff: 95.66568904880306
-Test mean ep rew: 0.04583369261823502
+Test mean ep eff: 97.11636106670576
+Test mean ep rew: 0.04749570126372747
 
 TD3
 Train episodes: 100
-Train mean ep eff: 91.98021882587749
-Train mean ep rew: 0.033853236570525545
+Train mean ep eff: 94.74612939333612
+Train mean ep rew: 0.051307611945992246
 Test episodes: 60
-Test mean ep eff: 96.80775901107542
-Test mean ep rew: 0.050066735683057716
+Test mean ep eff: 97.68185502858475
+Test mean ep rew: 0.062099070619993584
+
+DDPGExperience
+Train episodes: 100
+Train mean ep eff: 95.99653034298971
+Train mean ep rew: 0.05936274804910588
+Test episodes: 60
+Test mean ep eff: 95.77405470542921
+Test mean ep rew: 0.04679798913420216
 
 TD3Experience
 Train episodes: 100
-Train mean ep eff: 95.26343328009015
-Train mean ep rew: 0.05750846879397959
+Train mean ep eff: 96.10287736574845
+Train mean ep rew: 0.05948665149113731
 Test episodes: 60
-Test mean ep eff: 95.99281205288591
-Test mean ep rew: 0.04942128655868782
+Test mean ep eff: 95.48075249444058
+Test mean ep rew: 0.04592499165021282
 
-TD3
+DDPG
 Train episodes: 100
-Train mean ep eff: 87.942803579232
-Train mean ep rew: 0.013710961749370108
+Train mean ep eff: 94.3134096417395
+Train mean ep rew: 0.04694904643775795
 Test episodes: 60
-Test mean ep eff: 0.1860226516595473
-Test mean ep rew: -0.45706844222228327
+Test mean ep eff: 96.43044719717435
+Test mean ep rew: 0.05008174732096031
 
-TD3Experience
+DDPGExperience
 Train episodes: 100
-Train mean ep eff: 95.108320810266
-Train mean ep rew: 0.05713208058647574
+Train mean ep eff: 95.93214599890173
+Train mean ep rew: 0.05967939685028554
 Test episodes: 60
-Test mean ep eff: 95.53673311140305
-Test mean ep rew: 0.0448459970678861
-
-TD3
-Train episodes: 100
-Train mean ep eff: 91.47138179348318
-Train mean ep rew: 0.03220815092179431
-Test episodes: 60
-Test mean ep eff: 95.47374631492112
-Test mean ep rew: 0.04397459059418439
+Test mean ep eff: 95.91177465624212
+Test mean ep rew: 0.04679587836351054
 
 TD3Experience
 Train episodes: 100
-Train mean ep eff: 95.87389214421486
-Train mean ep rew: 0.05744306269870607
+Train mean ep eff: 95.19336442518396
+Train mean ep rew: 0.05461825668484093
 Test episodes: 60
-Test mean ep eff: 96.20962652377129
-Test mean ep rew: 0.04761057087661393
+Test mean ep eff: 94.65862103473484
+Test mean ep rew: 0.03553953387729783
+
+DDPG
+Train episodes: 100
+Train mean ep eff: 95.02671205321984
+Train mean ep rew: 0.06399628104543273
+Test episodes: 60
+Test mean ep eff: 98.24309193602268
+Test mean ep rew: 0.06401887229695515
 
 TD3
 Train episodes: 100
-Train mean ep eff: 91.74309432443918
-Train mean ep rew: 0.03247128464380656
+Train mean ep eff: 94.98327224381251
+Train mean ep rew: 0.0656890763602407
 Test episodes: 60
-Test mean ep eff: 95.84327236244016
-Test mean ep rew: 0.04510403782849116
+Test mean ep eff: 96.85810000921363
+Test mean ep rew: 0.05631409050349089
+
+DDPGExperience
+Train episodes: 100
+Train mean ep eff: 95.82236375048652
+Train mean ep rew: 0.05879579747345015
+Test episodes: 60
+Test mean ep eff: 95.8718712205475
+Test mean ep rew: 0.04703088700406263
 
 TD3Experience
 Train episodes: 100
-Train mean ep eff: 95.35889155866305
-Train mean ep rew: 0.053596110106577874
+Train mean ep eff: 96.05889925672689
+Train mean ep rew: 0.061438011648918385
 Test episodes: 60
-Test mean ep eff: 95.68146563164706
-Test mean ep rew: 0.04599056894185408
+Test mean ep eff: 95.75310439433382
+Test mean ep rew: 0.04564155532986809
 
-TD3
+DDPG
 Train episodes: 100
-Train mean ep eff: 91.8231111064153
-Train mean ep rew: 0.03742632943190396
+Train mean ep eff: 94.26421054626618
+Train mean ep rew: 0.0549312773460817
 Test episodes: 60
-Test mean ep eff: 92.18148587600894
-Test mean ep rew: 0.042301483427151766
+Test mean ep eff: 94.26685183655215
+Test mean ep rew: 0.04704137805802684
 
-TD3Experience
+DDPGExperience
 Train episodes: 100
-Train mean ep eff: 96.084551657889
-Train mean ep rew: 0.060356982458300595
+Train mean ep eff: 95.50304289774648
+Train mean ep rew: 0.057471688994740165
 Test episodes: 60
-Test mean ep eff: 97.09951989187422
-Test mean ep rew: 0.0485572937121747
-
-TD3
-Train episodes: 100
-Train mean ep eff: 90.31702849570223
-Train mean ep rew: 0.0344627431671394
-Test episodes: 60
-Test mean ep eff: 18.70074849105965
-Test mean ep rew: -0.4255416297499718
+Test mean ep eff: 95.47569850191489
+Test mean ep rew: 0.045852850708712416
 
 TD3Experience
 Train episodes: 100
-Train mean ep eff: 95.67826990097629
-Train mean ep rew: 0.06296445919200683
+Train mean ep eff: 95.95061389515159
+Train mean ep rew: 0.059473025329034035
 Test episodes: 60
-Test mean ep eff: 96.15699076832524
-Test mean ep rew: 0.03579205964436768
+Test mean ep eff: 95.88550093845791
+Test mean ep rew: 0.04633251697240639
 
 TD3
 Train episodes: 100
-Train mean ep eff: 92.19507121201205
-Train mean ep rew: 0.030392731887895232
+Train mean ep eff: 94.64451851565475
+Train mean ep rew: 0.04231359405406155
 Test episodes: 60
-Test mean ep eff: 97.10971101279411
-Test mean ep rew: 0.058484296255245385
+Test mean ep eff: 97.46196394679595
+Test mean ep rew: 0.0563755176954547
+
+DDPGExperience
+Train episodes: 100
+Train mean ep eff: 95.05866249112339
+Train mean ep rew: 0.054667020452192024
+Test episodes: 60
+Test mean ep eff: 94.89347033158774
+Test mean ep rew: 0.03575863259862737
 
 TD3Experience
 Train episodes: 100
-Train mean ep eff: 96.03913500856538
-Train mean ep rew: 0.052328315120263626
+Train mean ep eff: 95.94415274675532
+Train mean ep rew: 0.06085814474313257
 Test episodes: 60
-Test mean ep eff: 96.2782889533739
-Test mean ep rew: 0.04306417035025444
+Test mean ep eff: 95.87886852664877
+Test mean ep rew: 0.0469641215127709
+
+DDPG
+Train episodes: 100
+Train mean ep eff: 93.62892278104623
+Train mean ep rew: 0.052689675582550555
+Test episodes: 60
+Test mean ep eff: 98.62684524181144
+Test mean ep rew: 0.05917583236069967
 
 TD3
 Train episodes: 100
-Train mean ep eff: 92.1530315795965
-Train mean ep rew: 0.03825682905616055
+Train mean ep eff: 95.01856684568405
+Train mean ep rew: 0.054241828102555775
 Test episodes: 60
-Test mean ep eff: 96.46929577379488
-Test mean ep rew: 0.051637400825422626
+Test mean ep eff: 97.7158881684574
+Test mean ep rew: 0.06095857295853908
+
+DDPGExperience
+Train episodes: 100
+Train mean ep eff: 95.8446098175139
+Train mean ep rew: 0.05924216757168482
+Test episodes: 60
+Test mean ep eff: 95.7937328309951
+Test mean ep rew: 0.04664849800313668
 
 TD3Experience
 Train episodes: 100
-Train mean ep eff: 96.07006512400991
-Train mean ep rew: 0.05483789457820969
+Train mean ep eff: 96.03058151906012
+Train mean ep rew: 0.05960403536454503
 Test episodes: 60
-Test mean ep eff: 97.43197999783025
-Test mean ep rew: 0.04923744876741023
+Test mean ep eff: 95.15934219314292
+Test mean ep rew: 0.042327253927025736
+
+DDPG
+Train episodes: 100
+Train mean ep eff: 94.18477443814068
+Train mean ep rew: 0.048405742966803104
+Test episodes: 60
+Test mean ep eff: 91.5369868411531
+Test mean ep rew: 0.028183461048724764
 
 TD3
 Train episodes: 100
-Train mean ep eff: 90.70377154645851
-Train mean ep rew: 0.027117895033180277
+Train mean ep eff: 95.03434881670692
+Train mean ep rew: 0.05327370322860459
 Test episodes: 60
-Test mean ep eff: 95.34428384348774
-Test mean ep rew: 0.04763503090504043
+Test mean ep eff: 98.68846400284691
+Test mean ep rew: 0.06335426359327569
+
+DDPGExperience
+Train episodes: 100
+Train mean ep eff: 95.88876904293379
+Train mean ep rew: 0.05777384057967501
+Test episodes: 60
+Test mean ep eff: 95.50712420986676
+Test mean ep rew: 0.04439942277594819
 
 TD3Experience
 Train episodes: 100
-Train mean ep eff: 95.54775976513275
-Train mean ep rew: 0.06329195764871881
+Train mean ep eff: 95.94295363840163
+Train mean ep rew: 0.05977818454887934
 Test episodes: 60
-Test mean ep eff: 95.69947966420492
-Test mean ep rew: 0.03971837120288103
+Test mean ep eff: 95.8160912572089
+Test mean ep rew: 0.04680773769168137
+
+DDPG
+Train episodes: 100
+Train mean ep eff: 95.09886214435507
+Train mean ep rew: 0.05624177196213301
+Test episodes: 60
+Test mean ep eff: 98.55548190448663
+Test mean ep rew: 0.06415969438660775
 
 TD3
 Train episodes: 100
-Train mean ep eff: 91.9611648024824
-Train mean ep rew: 0.048743667224643523
+Train mean ep eff: 94.43461707805193
+Train mean ep rew: 0.0577148107095488
 Test episodes: 60
-Test mean ep eff: 96.67497339454472
-Test mean ep rew: 0.04755452512410819
+Test mean ep eff: 94.93849623995646
+Test mean ep rew: 0.043293605246183454
+
+DDPGExperience
+Train episodes: 100
+Train mean ep eff: 95.30567852757041
+Train mean ep rew: 0.054500683143586845
+Test episodes: 60
+Test mean ep eff: 95.39675196689817
+Test mean ep rew: 0.038529255350472684
+
+TD3Experience
+Train episodes: 100
+Train mean ep eff: 95.94533460281156
+Train mean ep rew: 0.0585314357657326
+Test episodes: 60
+Test mean ep eff: 95.83632848696757
+Test mean ep rew: 0.04682360467670647
+
+DDPG
+Train episodes: 100
+Train mean ep eff: 94.23346300549485
+Train mean ep rew: 0.04017939965658487
+Test episodes: 60
+Test mean ep eff: 98.62425332611859
+Test mean ep rew: 0.0646051660294319
+
+TD3
+Train episodes: 100
+Train mean ep eff: 94.8233752926189
+Train mean ep rew: 0.05436221860271081
+Test episodes: 60
+Test mean ep eff: 96.30427814664519
+Test mean ep rew: 0.05526600373519462
+
+DDPGExperience
+Train episodes: 100
+Train mean ep eff: 94.879409383669
+Train mean ep rew: 0.05282130963618242
+Test episodes: 60
+Test mean ep eff: 94.61342810158848
+Test mean ep rew: 0.035770853234538616
+
+TD3Experience
+Train episodes: 100
+Train mean ep eff: 95.07520852339906
+Train mean ep rew: 0.054970953835501796
+Test episodes: 60
+Test mean ep eff: 94.72211175210568
+Test mean ep rew: 0.03551786986523307
+
+TD3
+Train episodes: 100
+Train mean ep eff: 93.78275661491506
+Train mean ep rew: 0.0460318379989821
+Test episodes: 60
+Test mean ep eff: 97.24421719968228
+Test mean ep rew: 0.05037892657836267
+
+DDPGExperience
+Train episodes: 100
+Train mean ep eff: 94.93286440613036
+Train mean ep rew: 0.054340467094414986
+Test episodes: 60
+Test mean ep eff: 95.03247573959268
+Test mean ep rew: 0.03583024031899653
+
+TD3Experience
+Train episodes: 100
+Train mean ep eff: 96.17166573505104
+Train mean ep rew: 0.059593830278366004
+Test episodes: 60
+Test mean ep eff: 95.67798410616895
+Test mean ep rew: 0.044118899837057926
 
