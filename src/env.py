@@ -58,7 +58,8 @@ DEFAULT_NORM_DIC = {
 }
 DEFAULT_LOG_PATH = Path("default")
 DEFAULT_REWARD = 0
-DEFAULT_WEATHER_PATH_NAMES = ["train_1_4_0.5", "test_1_4_0.5"]
+# DEFAULT_WEATHER_PATH_NAMES = ["train_1_4_0.5", "test_1_4_0.5"]
+DEFAULT_WEATHER_PATH_NAMES = ["train_4_4_0.9", "test_4_4_0.9"]
 
 
 class EnvStep(NamedTuple):
@@ -707,6 +708,8 @@ class ShadedPVEnv(CustomEnv):
             "test_1_4_0.5": Path("data/synthetic_weather_test_1_4_0.5.csv"),
             "train_0_4_0.5": Path("data/synthetic_weather_train_0_4_0.5.csv"),
             "test_0_4_0.5": Path("data/synthetic_weather_test_0_4_0.5.csv"),
+            "train_4_4_0.9": Path("data/synthetic_weather_train_4_4_0.9.csv"),
+            "test_4_4_0.9": Path("data/synthetic_weather_test_4_4_0.9.csv"),
         }
         df_paths = [weather_dic_path[p] for p in weather_paths]
         weather_dfs = [utils.csv_to_dataframe(df_path) for df_path in df_paths]

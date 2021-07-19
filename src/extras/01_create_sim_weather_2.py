@@ -165,9 +165,10 @@ def create_train_test_set(
 if __name__ == "__main__":
     create_train_test_set(
         modules=4,
-        max_shaded_modules=1,
+        max_shaded_modules=4,
         irradiance=[200, 400, 600, 800, 1000],
         amb_temperature=[25],
         days_train=300,
         days_test=60,
+        shaded_mod_prob=0.9,
     )
