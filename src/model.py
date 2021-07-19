@@ -1183,9 +1183,9 @@ if __name__ == "__main__":
     # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
     # model.quit()
 
-    # model = PO(demo_buffer_size=60_000)
-    # model.learn(timesteps=1)
-    # model.quit()
+    model = PO(demo_buffer_size=60_000)
+    model.learn(timesteps=1)
+    model.quit()
 
     train_steps = 1
 
@@ -1196,7 +1196,7 @@ if __name__ == "__main__":
             train_steps=train_steps,
             policy_kwargs=explore_policy_kwargs2,
         )
-        model.learn(timesteps=60_000)
+        model.learn(timesteps=59_000)
         model.quit()
 
         # for _ in range(10):
@@ -1206,7 +1206,7 @@ if __name__ == "__main__":
             train_steps=train_steps,
             policy_kwargs=explore_policy_kwargs2,
         )
-        model.learn(timesteps=60_000)
+        model.learn(timesteps=59_000)
         model.quit()
 
         # for _ in range(10):
@@ -1217,7 +1217,7 @@ if __name__ == "__main__":
             prefill_buffer=100,
             train_steps=train_steps,
             lambda_bc=1.0,
-            policy_kwargs=explore_policy_kwargs,
+            # policy_kwargs=explore_policy_kwargs,
         )
         model.learn(timesteps=57_000)
         model.quit()
@@ -1229,8 +1229,8 @@ if __name__ == "__main__":
             warmup_train_steps=3000,
             prefill_buffer=100,
             train_steps=train_steps,
-            lambda_bc=0.1,
-            policy_kwargs=explore_policy_kwargs,
+            lambda_bc=1.0,
+            # policy_kwargs=explore_policy_kwargs,
         )
         model.learn(timesteps=57_000)
         model.quit()
