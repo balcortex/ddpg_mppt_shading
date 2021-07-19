@@ -362,6 +362,7 @@ class ShadedPVEnv(CustomEnv):
 
         self._norm_dic = {} or dic_normalizer
         self._reward = reward
+        self.reward_name = "norm_delta_power"
 
         self.env_tracker = EnvironmentTracker(self)
 
@@ -526,7 +527,7 @@ class ShadedPVEnv(CustomEnv):
     @property
     def reward(self) -> numbers.Real:
         """Return the reward at each step"""
-        rew = self._history["norm_delta_power"][-1]
+        rew = self._history[self.reward_name][-1]
         # rew = self._history["norm_power"][-1]
         # rew = self._history["power"][-1] / self._history["optimum_power"][-1]
 
@@ -627,6 +628,7 @@ class ShadedPVEnv(CustomEnv):
             "states": self._name_states,
             "dic_normalizer": self._norm_dic,
             "reward": self._reward,
+            "reward_name": self.reward_name,
         }
 
     @classmethod

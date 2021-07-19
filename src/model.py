@@ -1168,13 +1168,14 @@ if __name__ == "__main__":
     import gc
 
     explore_policy_kwargs = {
-        "noise": GaussianNoise(0, 0.1),
-        "schedule": LinearSchedule(max_steps=1_000),
+        "noise": GaussianNoise(0, 0.05),
+        "schedule": LinearSchedule(max_steps=30_000),
         "decrease_noise": True,
     }
+
     explore_policy_kwargs2 = {
         "noise": GaussianNoise(0, 0.3),
-        "schedule": LinearSchedule(max_steps=10_000),
+        "schedule": LinearSchedule(max_steps=9_000),
         "decrease_noise": True,
     }
 
@@ -1186,19 +1187,50 @@ if __name__ == "__main__":
     # model.learn(timesteps=1)
     # model.quit()
 
-    for _ in range(5):
+    train_steps = 1
+
+    for _ in range(10):
+        model = DDPG(
+            warmup_train_steps=0,
+            prefill_buffer=1000,
+            train_steps=train_steps,
+            policy_kwargs=explore_policy_kwargs2,
+        )
+        model.learn(timesteps=60_000)
+        model.quit()
+
+        # for _ in range(10):
+        model = TD3(
+            warmup_train_steps=0,
+            prefill_buffer=1000,
+            train_steps=train_steps,
+            policy_kwargs=explore_policy_kwargs2,
+        )
+        model.learn(timesteps=60_000)
+        model.quit()
+
+        # for _ in range(10):
+        model = DDPGExperience(
+            demo_buffer_size=2900,
+            use_q_filter=True,
+            warmup_train_steps=3000,
+            prefill_buffer=100,
+            train_steps=train_steps,
+            lambda_bc=1.0,
+            policy_kwargs=explore_policy_kwargs,
+        )
+        model.learn(timesteps=57_000)
+        model.quit()
+
+        # for _ in range(10):
         model = TD3Experience(
             demo_buffer_size=2900,
             use_q_filter=True,
             warmup_train_steps=3000,
             prefill_buffer=100,
-        )
-        model.learn(timesteps=57_000)
-        model.quit()
-
-        model = TD3(
-            warmup_train_steps=3000,
-            prefill_buffer=3000,
+            train_steps=train_steps,
+            lambda_bc=0.1,
+            policy_kwargs=explore_policy_kwargs,
         )
         model.learn(timesteps=57_000)
         model.quit()
