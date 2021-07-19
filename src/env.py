@@ -25,7 +25,7 @@ DEFAULT_STATES = (
     "norm_mod4_voltage",
     "duty_cycle",
     "delta_duty_cycle",
-    "norm_power",
+    # "norm_power",
 )
 DEFAULT_LOG_STATES = (
     "date",
@@ -362,7 +362,7 @@ class ShadedPVEnv(CustomEnv):
 
         self._norm_dic = {} or dic_normalizer
         self._reward = reward
-        self.reward_name = "norm_delta_power"
+        self.reward_name = "norm_power"
 
         self.env_tracker = EnvironmentTracker(self)
 
