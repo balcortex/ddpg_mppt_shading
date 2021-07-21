@@ -1183,201 +1183,56 @@ if __name__ == "__main__":
     # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
     # model.quit()
 
-    model = PO(demo_buffer_size=60_000)
-    model.learn(timesteps=1)
-    model.quit()
+    NUM_EXPS = 10
+    TRAIN_STEPS = 1
 
-    train_steps = 1
+    for _ in tqdm(range(NUM_EXPS), desc="Running PO"):
+        model = PO(demo_buffer_size=60_000)
+        model.learn(timesteps=1)
+        model.quit()
 
-    for _ in range(10):
+    for _ in tqdm(range(NUM_EXPS), desc="Running DDPG"):
         model = DDPG(
             warmup_train_steps=0,
             prefill_buffer=1000,
-            train_steps=train_steps,
+            train_steps=TRAIN_STEPS,
             policy_kwargs=explore_policy_kwargs2,
         )
         model.learn(timesteps=59_000)
         model.quit()
 
-        # for _ in range(10):
+    for _ in tqdm(range(NUM_EXPS), desc="Running TD#"):
         model = TD3(
             warmup_train_steps=0,
             prefill_buffer=1000,
-            train_steps=train_steps,
+            train_steps=TRAIN_STEPS,
             policy_kwargs=explore_policy_kwargs2,
         )
         model.learn(timesteps=59_000)
         model.quit()
 
-        # for _ in range(10):
+    for _ in tqdm(range(NUM_EXPS), desc="Running DDPG Experience"):
         model = DDPGExperience(
             demo_buffer_size=2900,
             use_q_filter=True,
             warmup_train_steps=3000,
             prefill_buffer=100,
-            train_steps=train_steps,
+            train_steps=TRAIN_STEPS,
             lambda_bc=1.0,
             # policy_kwargs=explore_policy_kwargs,
         )
         model.learn(timesteps=57_000)
         model.quit()
 
-        # for _ in range(10):
+    for _ in tqdm(range(NUM_EXPS), desc="Running TD3 Experience"):
         model = TD3Experience(
             demo_buffer_size=2900,
             use_q_filter=True,
             warmup_train_steps=3000,
             prefill_buffer=100,
-            train_steps=train_steps,
+            train_steps=TRAIN_STEPS,
             lambda_bc=1.0,
             # policy_kwargs=explore_policy_kwargs,
         )
         model.learn(timesteps=57_000)
         model.quit()
-
-    # model = TD3()
-    # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
-    # model.quit()
-
-    # model = DDPGExperience()
-    # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
-    # model.quit()
-
-    # model = DDPG(
-    #     prefill_buffer=600,
-    #     warmup_train_steps=0,
-    #     policy_kwargs=explore_policy_kwargs2,
-    #     target_action_epsilon_noise=0.0,
-    # )
-    # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=5000)
-    # model.quit()
-
-    # dic_ddpgexp = {
-    #     "batch_size": 64,  # 64
-    #     "actor_lr": 1e-4,  # 1e-3
-    #     "critic_lr": 1e-3,
-    #     "tau_critic": 1e-3,  # 1e-3
-    #     "tau_actor": 1e-3,  # 1e-4
-    #     "actor_l2": 0,
-    #     "critic_l2": 0,
-    #     "gamma": 0.01,  # 0.6
-    #     "n_steps": 1,
-    #     "norm_rewards": 0,
-    #     "train_steps": 1,  # 5
-    #     "collect_steps": 1,
-    #     "prefill_buffer": 600,
-    #     "use_per": [False, True],  # True,
-    #     "warmup": 10_000,
-    #     "lambda_bc": [0.01, 0.2, 0.5, 0.7, 0.99],
-    #     "use_q_filter": True,
-    #     "buffer_kwargs": {
-    #         "capacity": 50_000,
-    #     },
-    #     "demo_buffer_kwargs": {
-    #         "capacity": 10_000,
-    #     },
-    #     "env_kwargs": {
-    #         "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
-    #     },
-    # }
-    # DDPGExp.run_from_grid(
-    #     dic_ddpgexp, total_timesteps=30_000, val_every_timesteps=1_000, repeat_run=1
-    # )
-
-    # dic_ddpg = {
-    #     "batch_size": 64,  # 64
-    #     "actor_lr": 1e-4,  # 1e-3
-    #     "critic_lr": 1e-3,
-    #     "tau_critic": 1e-4,  # 1e-3
-    #     "tau_actor": 1e-4,  # 1e-4
-    #     "actor_l2": 0,
-    #     "critic_l2": 0,
-    #     "gamma": 0.01,  # 0.6
-    #     "n_steps": 1,
-    #     "norm_rewards": 0,
-    #     "train_steps": 1,  # 5
-    #     "collect_steps": 1,
-    #     "prefill_buffer": 0,
-    #     "use_per": False,  # True,
-    #     "warmup": 1000,
-    #     "policy_kwargs": {
-    #         "noise": [GaussianNoise(mean=0.0, std=0.3)],
-    #         "schedule": [LinearSchedule(max_steps=10_000)],
-    #         "decrease_noise": True,
-    #     },
-    #     "buffer_kwargs": {
-    #         "capacity": 50_000,
-    #     },
-    #     "env_kwargs": {
-    #         "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
-    #     },
-    # }
-    # DDPG.run_from_grid(
-    #     dic_ddpg, total_timesteps=30_000, val_every_timesteps=1_000, repeat_run=1
-    # )
-
-    # td3_dic = {
-    #     "batch_size": 64,  # 64
-    #     "actor_lr": 1e-4,  # 1e-3
-    #     "critic_lr": 1e-3,
-    #     "tau_critic": 1e-4,  # 1e-3
-    #     "tau_actor": 1e-4,  # 1e-4
-    #     "actor_l2": 0,
-    #     "critic_l2": 0,
-    #     "gamma": 0.01,  # 0.6
-    #     "n_steps": 1,
-    #     "norm_rewards": 0,
-    #     "train_steps": 1,  # 5
-    #     "collect_steps": 1,
-    #     "prefill_buffer": 1000,
-    #     "use_per": False,  # True,
-    #     "warmup": 1000,
-    #     "policy_delay": 2,
-    #     "target_action_epsilon_noise": 0.001,
-    #     "policy_kwargs": {
-    #         "noise": [GaussianNoise(mean=0.0, std=0.3)],
-    #         "schedule": [LinearSchedule(max_steps=10_000)],
-    #         "decrease_noise": True,
-    #     },
-    #     "buffer_kwargs": {
-    #         "capacity": 50_000,
-    #     },
-    #     "env_kwargs": {
-    #         "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
-    #     },
-    # }
-    # TD3.run_from_grid(td3_dic, total_timesteps=30_000, val_every_timesteps=1_000)
-
-    # dic = {
-    #     "batch_size": 64,  # 64
-    #     "actor_lr": 1e-4,  # 1e-3
-    #     "critic_lr": 1e-3,
-    #     "tau_critic": 1e-4,  # 1e-3
-    #     "tau_actor": 1e-4,  # 1e-4
-    #     "actor_l2": 0,
-    #     "critic_l2": 0,
-    #     "gamma": 0.1,  # 0.6
-    #     "n_steps": 1,
-    #     "norm_rewards": 0,
-    #     "train_steps": 1,  # 5
-    #     "collect_steps": 1,
-    #     "prefill_buffer": 600,
-    #     "use_per": False,  # True,
-    #     "warmup": 10_000,
-    #     "policy_delay": 2,
-    #     "target_action_epsilon_noise": 0.001,
-    #     "use_q_filter": True,
-    #     "lambda_bc": 0.1,
-    #     "buffer_kwargs": {
-    #         "capacity": 50_000,
-    #     },
-    #     "demo_buffer_kwargs": {
-    #         "capacity": 10_000,
-    #     },
-    #     "env_kwargs": {
-    #         "weather_paths": [["train_1_4_0.5", "test_1_4_0.5"]],
-    #     },
-    # }
-    # TD3Exp.run_from_grid(
-    #     dic, total_timesteps=30_000, val_every_timesteps=1_000, repeat_run=1
-    # )

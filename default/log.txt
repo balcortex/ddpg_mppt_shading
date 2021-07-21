@@ -1,8 +1,0 @@
-PO
-Train episodes: 100
-Train mean ep eff: 95.34814127894656
-Train mean ep rew: 0.05562489995639756
-Test episodes: 60
-Test mean ep eff: 94.53428964732625
-Test mean ep rew: 0.036513971067102725
-
