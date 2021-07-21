@@ -387,10 +387,11 @@ class ShadedPVEnv(CustomEnv):
         self._history.clear()
         self._weather_comb = {}  # save all the unique weather combinations (ordered)
         # self._action = np.array([0.25])
-        self._action = self.action_space.sample()
+        self._action = np.random.rand(1) # Initial random dutyc [0,1)
+        action = np.zeros_like(self._action) # First action is 0 (no change in dutyc)
         self._row_idx = -1
 
-        return self.step(action=self._action)[0]
+        return self.step(action=action)[0]
 
     def _step(self, action: np.ndarray) -> EnvStep:
         """Play a step in the environment"""
@@ -535,7 +536,7 @@ class ShadedPVEnv(CustomEnv):
     def reward(self) -> numbers.Real:
         """Return the reward at each step"""
         # rew = self._history["power"][-1] / self._history["optimum_power"][-1]
-        rew = sum(self._history[k][-1] * v for k, v in self._reward)
+        rew = sum(self._history[k][-1] * v for k, v in self._reward.items())
 
         if self._reward_type == 0:
             return rew
@@ -690,7 +691,8 @@ class ShadedPVEnv(CustomEnv):
             "log_states": DEFAULT_LOG_STATES,
             "dic_normalizer": DEFAULT_NORM_DIC,
             "plot_states": DEFAULT_PLOT_STATES,
-            "reward": DEFAULT_REWARD_TYPE,
+            "reward_type": DEFAULT_REWARD_TYPE,
+            "reward": DEFAULT_REWARD,
         }
         if kwargs is not None:
             dic.update(kwargs)
