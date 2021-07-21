@@ -57,7 +57,11 @@ DEFAULT_NORM_DIC = {
     "mod4_voltage": 9,
 }
 DEFAULT_LOG_PATH = Path("default")
-DEFAULT_REWARD = 0
+DEFAULT_REWARD_TYPE = 0
+DEFAULT_REWARD = {
+    "norm_delta_power": 1.0,
+    "norm_power": 0.0,
+}
 # DEFAULT_WEATHER_PATH_NAMES = ["train_1_4_0.5", "test_1_4_0.5"]
 DEFAULT_WEATHER_PATH_NAMES = ["train_4_4_0.9", "test_4_4_0.9"]
 
@@ -328,7 +332,8 @@ class ShadedPVEnv(CustomEnv):
         dic_normalizer: Optional[Dict[str, numbers.Real]] = None,
         log_path: Optional[Path] = None,
         plot_states: Optional[Dict[str, Union[str, Sequence[str]]]] = None,
-        reward: int = 0,
+        reward_type: int = 0,
+        reward: Optional[Dict[str, numbers.Real]] = None,
     ):
         self.pvarray = pvarray
         self.weather_dfs = [df for _, df in weather_df.groupby(weather_df.index.date)]
@@ -362,8 +367,8 @@ class ShadedPVEnv(CustomEnv):
         self._LogStatesTuple = namedtuple("LogStates", self._name_log_states)
 
         self._norm_dic = {} or dic_normalizer
+        self._reward_type = reward_type
         self._reward = reward
-        self.reward_name = "norm_delta_power"
 
         self.env_tracker = EnvironmentTracker(self)
 
@@ -381,7 +386,8 @@ class ShadedPVEnv(CustomEnv):
         self._save_history()
         self._history.clear()
         self._weather_comb = {}  # save all the unique weather combinations (ordered)
-        self._action = np.array([0.25])
+        # self._action = np.array([0.25])
+        self._action = self.action_space.sample()
         self._row_idx = -1
 
         return self.step(action=self._action)[0]
@@ -528,15 +534,14 @@ class ShadedPVEnv(CustomEnv):
     @property
     def reward(self) -> numbers.Real:
         """Return the reward at each step"""
-        rew = self._history[self.reward_name][-1]
-        # rew = self._history["norm_power"][-1]
         # rew = self._history["power"][-1] / self._history["optimum_power"][-1]
+        rew = sum(self._history[k][-1] * v for k, v in self._reward)
 
-        if self._reward == 0:
+        if self._reward_type == 0:
             return rew
-        elif self._reward == 1:
+        elif self._reward_type == 1:
             return max(0, rew)
-        elif self._reward == 2:
+        elif self._reward_type == 2:
             return rew if rew > 0 else -1
         else:
             raise NotImplementedError
@@ -628,8 +633,8 @@ class ShadedPVEnv(CustomEnv):
         return {
             "states": self._name_states,
             "dic_normalizer": self._norm_dic,
+            "reward_type": self._reward_type,
             "reward": self._reward,
-            "reward_name": self.reward_name,
         }
 
     @classmethod
@@ -645,6 +650,7 @@ class ShadedPVEnv(CustomEnv):
             dic_normalizer=DEFAULT_NORM_DIC,
             log_path=DEFAULT_LOG_PATH,
             plot_states=DEFAULT_PLOT_STATES,
+            reward_type=DEFAULT_REWARD_TYPE,
             reward=DEFAULT_REWARD,
         )
 
@@ -684,7 +690,7 @@ class ShadedPVEnv(CustomEnv):
             "log_states": DEFAULT_LOG_STATES,
             "dic_normalizer": DEFAULT_NORM_DIC,
             "plot_states": DEFAULT_PLOT_STATES,
-            "reward": DEFAULT_REWARD,
+            "reward": DEFAULT_REWARD_TYPE,
         }
         if kwargs is not None:
             dic.update(kwargs)
