@@ -23,9 +23,12 @@ DEFAULT_STATES = (
     "norm_mod2_voltage",
     "norm_mod3_voltage",
     "norm_mod4_voltage",
-    "duty_cycle",
-    "delta_duty_cycle",
+    "norm_voltage",
+    "norm_delta_voltage",
+    # "duty_cycle",
+    # "delta_duty_cycle",
     "norm_power",
+    "norm_delta_power",
 )
 DEFAULT_LOG_STATES = (
     "date",
@@ -59,8 +62,8 @@ DEFAULT_NORM_DIC = {
 DEFAULT_LOG_PATH = Path("default")
 DEFAULT_REWARD_TYPE = 0
 DEFAULT_REWARD = {
-    "norm_delta_power": 1.0,
-    "norm_power": 0.0,
+    "norm_delta_power": 0.0,
+    "norm_power": 1.0,
 }
 # DEFAULT_WEATHER_PATH_NAMES = ["train_1_4_0.5", "test_1_4_0.5"]
 DEFAULT_WEATHER_PATH_NAMES = ["train_4_4_0.9", "test_4_4_0.9"]
@@ -387,8 +390,8 @@ class ShadedPVEnv(CustomEnv):
         self._history.clear()
         self._weather_comb = {}  # save all the unique weather combinations (ordered)
         # self._action = np.array([0.25])
-        self._action = np.random.rand(1) # Initial random dutyc [0,1)
-        action = np.zeros_like(self._action) # First action is 0 (no change in dutyc)
+        self._action = np.random.rand(1)  # Initial random dutyc [0,1)
+        action = np.zeros_like(self._action)  # First action is 0 (no change in dutyc)
         self._row_idx = -1
 
         return self.step(action=action)[0]
@@ -423,7 +426,7 @@ class ShadedPVEnv(CustomEnv):
         # The shape of the observation space match the list of states provided by
         # the user
         len_ = len(self._name_states)
-        limit = np.array([np.inf] * len_)
+        limit = np.array([np.inf] * len_, dtype=np.float32)
         return spaces.Box(low=-limit, high=limit, shape=limit.shape)
 
     def _add_history(self, result: SimulinkModelOutput) -> None:
