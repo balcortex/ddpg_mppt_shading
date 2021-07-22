@@ -19,15 +19,15 @@ from src.pvsys import ShadedArray, SimulinkModelOutput
 
 DEFAULT_WEATHER_PATH = Path("data/synthetic_weather_test.csv")
 DEFAULT_STATES = (
-    "norm_mod1_voltage",
-    "norm_mod2_voltage",
-    "norm_mod3_voltage",
-    "norm_mod4_voltage",
+    # "norm_mod1_voltage",
+    # "norm_mod2_voltage",
+    # "norm_mod3_voltage",
+    # "norm_mod4_voltage",
     "norm_voltage",
     "norm_delta_voltage",
     # "duty_cycle",
     # "delta_duty_cycle",
-    "norm_power",
+    # "norm_power",
     "norm_delta_power",
 )
 DEFAULT_LOG_STATES = (
@@ -62,8 +62,8 @@ DEFAULT_NORM_DIC = {
 DEFAULT_LOG_PATH = Path("default")
 DEFAULT_REWARD_TYPE = 0
 DEFAULT_REWARD = {
-    "norm_delta_power": 0.0,
-    "norm_power": 1.0,
+    "norm_delta_power": 1.0,
+    "norm_power": 0.0,
 }
 # DEFAULT_WEATHER_PATH_NAMES = ["train_1_4_0.5", "test_1_4_0.5"]
 DEFAULT_WEATHER_PATH_NAMES = ["train_4_4_0.9", "test_4_4_0.9"]
