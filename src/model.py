@@ -1162,6 +1162,72 @@ class PO(DDPGExperience):
         return []
 
 
+def run_ddpgexp():
+    model = DDPGExperience(
+        demo_buffer_size=2900,
+        use_q_filter=True,
+        warmup_train_steps=3000,
+        prefill_buffer=100,
+        train_steps=TRAIN_STEPS,
+        lambda_bc=1.0,
+        # policy_kwargs=explore_policy_kwargs,
+    )
+    model.learn(timesteps=57_000)
+    model.quit()
+
+    return model
+
+
+def run_td3exp():
+    model = TD3Experience(
+        demo_buffer_size=2900,
+        use_q_filter=True,
+        warmup_train_steps=3000,
+        prefill_buffer=100,
+        train_steps=TRAIN_STEPS,
+        lambda_bc=1.0,
+        # policy_kwargs=explore_policy_kwargs,
+    )
+    model.learn(timesteps=57_000)
+    model.quit()
+
+    return model
+
+
+def run_ddpg():
+    model = DDPG(
+        warmup_train_steps=0,
+        prefill_buffer=1000,
+        train_steps=TRAIN_STEPS,
+        policy_kwargs=explore_policy_kwargs2,
+    )
+    model.learn(timesteps=59_000)
+    model.quit()
+
+    return model
+
+
+def run_td3():
+    model = TD3(
+        warmup_train_steps=0,
+        prefill_buffer=1000,
+        train_steps=TRAIN_STEPS,
+        policy_kwargs=explore_policy_kwargs2,
+    )
+    model.learn(timesteps=59_000)
+    model.quit()
+
+    return model
+
+
+def run_po():
+    model = PO(demo_buffer_size=60_000)
+    model.learn(timesteps=1)
+    model.quit()
+
+    return model
+
+
 if __name__ == "__main__":
     from src.noise import GaussianNoise
     from src.schedule import LinearSchedule
@@ -1183,56 +1249,12 @@ if __name__ == "__main__":
     # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
     # model.quit()
 
-    NUM_EXPS = 10
+    NUM_EXPS = 1
     TRAIN_STEPS = 1
 
-    for _ in tqdm(range(NUM_EXPS), desc="Running DDPG Experience"):
-        model = DDPGExperience(
-            demo_buffer_size=2900,
-            use_q_filter=True,
-            warmup_train_steps=3000,
-            prefill_buffer=100,
-            train_steps=TRAIN_STEPS,
-            lambda_bc=1.0,
-            # policy_kwargs=explore_policy_kwargs,
-        )
-        model.learn(timesteps=57_000)
-        model.quit()
-
-    for _ in tqdm(range(NUM_EXPS), desc="Running TD3 Experience"):
-        model = TD3Experience(
-            demo_buffer_size=2900,
-            use_q_filter=True,
-            warmup_train_steps=3000,
-            prefill_buffer=100,
-            train_steps=TRAIN_STEPS,
-            lambda_bc=1.0,
-            # policy_kwargs=explore_policy_kwargs,
-        )
-        model.learn(timesteps=57_000)
-        model.quit()
-
-    for _ in tqdm(range(NUM_EXPS), desc="Running DDPG"):
-        model = DDPG(
-            warmup_train_steps=0,
-            prefill_buffer=1000,
-            train_steps=TRAIN_STEPS,
-            policy_kwargs=explore_policy_kwargs2,
-        )
-        model.learn(timesteps=59_000)
-        model.quit()
-
-    for _ in tqdm(range(NUM_EXPS), desc="Running TD#"):
-        model = TD3(
-            warmup_train_steps=0,
-            prefill_buffer=1000,
-            train_steps=TRAIN_STEPS,
-            policy_kwargs=explore_policy_kwargs2,
-        )
-        model.learn(timesteps=59_000)
-        model.quit()
-
-    for _ in tqdm(range(NUM_EXPS), desc="Running PO"):
-        model = PO(demo_buffer_size=60_000)
-        model.learn(timesteps=1)
-        model.quit()
+    for _ in range(NUM_EXPS):
+        run_ddpgexp()
+        run_td3exp()
+        run_ddpg()
+        run_td3()
+        run_po()

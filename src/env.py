@@ -19,16 +19,16 @@ from src.pvsys import ShadedArray, SimulinkModelOutput
 
 DEFAULT_WEATHER_PATH = Path("data/synthetic_weather_test.csv")
 DEFAULT_STATES = (
-    # "norm_mod1_voltage",
-    # "norm_mod2_voltage",
-    # "norm_mod3_voltage",
-    # "norm_mod4_voltage",
-    "norm_voltage",
-    "norm_delta_voltage",
-    # "duty_cycle",
-    # "delta_duty_cycle",
-    # "norm_power",
-    "norm_delta_power",
+    "norm_mod1_voltage",
+    "norm_mod2_voltage",
+    "norm_mod3_voltage",
+    "norm_mod4_voltage",
+    # "norm_voltage",
+    # "norm_delta_voltage",
+    "duty_cycle",
+    "delta_duty_cycle",
+    "norm_power",
+    # "norm_delta_power",
 )
 DEFAULT_LOG_STATES = (
     "date",
