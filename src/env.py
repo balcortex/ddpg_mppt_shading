@@ -44,6 +44,7 @@ DEFAULT_LOG_STATES = (
     "voltage",
     "delta_voltage",
     "delta_power",
+    "efficiency",
     "reward",
 )
 DEFAULT_PLOT_STATES = {
@@ -60,11 +61,11 @@ DEFAULT_NORM_DIC = {
     "mod4_voltage": 9,
 }
 DEFAULT_LOG_PATH = Path("default")
-DEFAULT_REWARD_TYPE = 0
+DEFAULT_REWARD_TYPE = 2
 DEFAULT_REWARD = {
     "norm_delta_power": 1.0,
     "norm_power": 0.0,
-    "optimum": 0.0,
+    "efficiency": 0.0,
 }
 # DEFAULT_WEATHER_PATH_NAMES = ["train_1_4_0.5", "test_1_4_0.5"]
 DEFAULT_WEATHER_PATH_NAMES = ["train_4_4_0.9", "test_4_4_0.9"]
@@ -464,7 +465,7 @@ class ShadedPVEnv(CustomEnv):
                     - self._history[name][self._row_idx - 1]
                 )
             )
-        # If the state is to be normalized
+        # If the state has to be normalized
         elif "norm" in state_name:
             name = state_name.replace("norm_", "")
             assert (
@@ -482,6 +483,8 @@ class ShadedPVEnv(CustomEnv):
             return str(self.weather_df.index[self._row_idx])
         elif state_name == "reward":
             return self.reward
+        elif state_name == "efficiency":
+            return self._history["power"][-1] / self._history["optimum_power"][-1]
 
         # No key found
         else:
@@ -550,7 +553,6 @@ class ShadedPVEnv(CustomEnv):
     @property
     def reward(self) -> numbers.Real:
         """Return the reward at each step"""
-        # rew = self._history["power"][-1] / self._history["optimum_power"][-1]
         rew = sum(self._history[k][-1] * v for k, v in self._reward.items())
 
         if self._reward_type == 0:

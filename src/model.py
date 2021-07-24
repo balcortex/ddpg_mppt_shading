@@ -9,7 +9,6 @@ from typing import Any, Dict, Optional, Sequence, Tuple, Union
 import gym
 import numpy as np
 import torch as th
-from matplotlib.figure import
 from torch.optim import Adam, Optimizer
 from tqdm import tqdm
 
@@ -1180,7 +1179,7 @@ class PO(DDPGExperience):
 def run_ddpgexp():
     model = DDPGExperience(
         demo_buffer_size=20000,
-        use_q_filter=False,
+        use_q_filter=True,
         warmup_train_steps=5000,
         prefill_buffer=1000,
         train_steps=TRAIN_STEPS,
@@ -1197,7 +1196,7 @@ def run_ddpgexp():
 def run_td3exp():
     model = TD3Experience(
         demo_buffer_size=20000,
-        use_q_filter=False,
+        use_q_filter=True,
         warmup_train_steps=5000,
         prefill_buffer=1000,
         train_steps=TRAIN_STEPS,
