@@ -64,6 +64,7 @@ DEFAULT_REWARD_TYPE = 0
 DEFAULT_REWARD = {
     "norm_delta_power": 1.0,
     "norm_power": 0.0,
+    "optimum": 0.0,
 }
 # DEFAULT_WEATHER_PATH_NAMES = ["train_1_4_0.5", "test_1_4_0.5"]
 DEFAULT_WEATHER_PATH_NAMES = ["train_4_4_0.9", "test_4_4_0.9"]
@@ -86,7 +87,9 @@ class EnvironmentTracker:
         """
 
         self.env = env
+        self.reset_all()
 
+    def reset_all(self) -> None:
         self.counter_episode_steps = 0
         self.counter_total_steps = 0
         self.counter_total_episodes = -1
@@ -337,6 +340,7 @@ class ShadedPVEnv(CustomEnv):
         plot_states: Optional[Dict[str, Union[str, Sequence[str]]]] = None,
         reward_type: int = 0,
         reward: Optional[Dict[str, numbers.Real]] = None,
+        allow_tracking: bool = True,
     ):
         self.pvarray = pvarray
         self.weather_dfs = [df for _, df in weather_df.groupby(weather_df.index.date)]
@@ -374,11 +378,16 @@ class ShadedPVEnv(CustomEnv):
         self._reward = reward
 
         self.env_tracker = EnvironmentTracker(self)
+        self.allow_tracking = allow_tracking
 
         super().__init__()
 
     def __str__(self) -> str:
         return f"ShadedPVEnv"
+
+    def reset_weather(self) -> None:
+        self._row_idx = -1
+        self._day_idx = -1
 
     def _reset(self) -> np.ndarray:
         """Reset the environment"""
@@ -479,6 +488,9 @@ class ShadedPVEnv(CustomEnv):
             raise KeyError(f"The state `{state_name}` is not recognized")
 
     def _save_history(self, minimim_length: int = 10) -> None:
+        if not self.allow_tracking:
+            return None
+
         # Save the history if any
         if self._row_idx > minimim_length:
             self._now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

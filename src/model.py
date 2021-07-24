@@ -260,6 +260,7 @@ class TD3Experience(Model):
         test_policy_kwargs: Optional[Dict[Any, Any]] = None,
         buffer_kwargs: Optional[Dict[Any, Any]] = None,
         buffer_demo_kwargs: Optional[Dict[Any, Any]] = None,
+        include_demo_metrics: bool = True,
     ):
 
         # - - - Class members
@@ -284,6 +285,7 @@ class TD3Experience(Model):
         self.use_q_filter = use_q_filter
         self.policy_delay = policy_delay
         self.target_action_noise = target_action_epsilon_noise
+        self.include_demo_metrics = include_demo_metrics
 
         # - - - Dict handling
         env_kwargs = src.utils.new_dic(env_kwargs)
@@ -366,22 +368,34 @@ class TD3Experience(Model):
         # - - - Buffers
         self.buffer = self._get_buffer(use_per=use_per, **buffer_kwargs)
         self.buffer_demo = self._get_buffer(use_per=use_per, **buffer_demo_kwargs)
-        self._fill_buffer(
-            self.buffer,
-            self.exp_source_explore,
-            num_experiences=prefill_buffer,
-            description="Filling replay buffer with random experiences",
-        )
+        if not include_demo_metrics:
+            self.env._day_idx = 80  # Use the last days to obtain expert samples
+            self.env.allow_tracking = False  # Do not count the expert episodes
+            demo_steps = 0
+        else:
+            demo_steps = self.buffer_demo.capacity
         self._fill_buffer(
             self.buffer_demo,
             self.exp_source_demo,
             num_experiences=-1,
             description="Filling replay demo buffer",
         )
+        if not self.env.allow_tracking:
+            self.env_tracker.reset()
+            self.env._day_idx = -1
+            self.env_tracker.reset_all()
+            self.env_tracker.reset()  # Bug: must call reset twice
+        self.env.allow_tracking = True
+        self._fill_buffer(
+            self.buffer,
+            self.exp_source_explore,
+            num_experiences=prefill_buffer,
+            description="Filling replay buffer with random experiences",
+        )
 
         # Add losses (np.nan) for each step taken in the prefilling for each loss
         dic = {k: np.nan for k in self.available_losses}
-        for _ in range(self.prefill_buffer + self.buffer_demo.capacity):
+        for _ in range(self.prefill_buffer + demo_steps):
             self._track(self.env_tracker, dic)
         # And for the ep metrics
         dic = {f"ep_{k}": np.nan for k in self.available_losses}
@@ -878,6 +892,7 @@ class BC(TD3Experience):
             test_policy_kwargs=test_policy_kwargs,
             buffer_kwargs=buffer_kwargs,
             buffer_demo_kwargs=buffer_demo_kwargs,
+            include_demo_metrics=True,
         )
 
         self.critic = None
@@ -950,6 +965,7 @@ class TD3(TD3Experience):
             test_policy_kwargs=test_policy_kwargs,
             buffer_kwargs=buffer_kwargs,
             buffer_demo_kwargs=buffer_demo_kwargs,
+            include_demo_metrics=True,
         )
 
     @property
@@ -988,6 +1004,7 @@ class DDPGExperience(TD3Experience):
         test_policy_kwargs: Optional[Dict[Any, Any]] = None,
         buffer_kwargs: Optional[Dict[Any, Any]] = None,
         buffer_demo_kwargs: Optional[Dict[Any, Any]] = None,
+        include_demo_metrics: bool = True,
     ):
         env_kwargs = src.utils.new_dic(env_kwargs)
         env_kwargs.setdefault("env_names", ["ddpgexp_train", "ddpgexp_test"])
@@ -1021,6 +1038,7 @@ class DDPGExperience(TD3Experience):
             test_policy_kwargs=test_policy_kwargs,
             buffer_kwargs=buffer_kwargs,
             buffer_demo_kwargs=buffer_demo_kwargs,
+            include_demo_metrics=include_demo_metrics,
         )
 
         self.critic2 = None
@@ -1100,6 +1118,7 @@ class DDPG(DDPGExperience):
             test_policy_kwargs=test_policy_kwargs,
             buffer_kwargs=buffer_kwargs,
             buffer_demo_kwargs=buffer_demo_kwargs,
+            include_demo_metrics=True,
         )
 
     @property
@@ -1147,6 +1166,7 @@ class PO(DDPGExperience):
             test_policy_kwargs=None,
             buffer_kwargs=None,
             buffer_demo_kwargs=None,
+            include_demo_metrics=True,
         )
 
         self.exp_source_test = ExperienceSource(
@@ -1164,15 +1184,16 @@ class PO(DDPGExperience):
 
 def run_ddpgexp():
     model = DDPGExperience(
-        demo_buffer_size=2900,
+        demo_buffer_size=20000,
         use_q_filter=True,
-        warmup_train_steps=3000,
-        prefill_buffer=100,
+        warmup_train_steps=0,
+        prefill_buffer=1000,
         train_steps=TRAIN_STEPS,
         lambda_bc=1.0,
-        # policy_kwargs=explore_policy_kwargs,
+        policy_kwargs=explore_policy_kwargs2,
+        include_demo_metrics=False,
     )
-    model.learn(timesteps=57_000)
+    model.learn(timesteps=59_000)
     model.quit()
 
     return model
@@ -1180,15 +1201,16 @@ def run_ddpgexp():
 
 def run_td3exp():
     model = TD3Experience(
-        demo_buffer_size=2900,
+        demo_buffer_size=20000,
         use_q_filter=True,
-        warmup_train_steps=3000,
-        prefill_buffer=100,
+        warmup_train_steps=0,
+        prefill_buffer=1000,
         train_steps=TRAIN_STEPS,
         lambda_bc=1.0,
-        # policy_kwargs=explore_policy_kwargs,
+        policy_kwargs=explore_policy_kwargs2,
+        include_demo_metrics=False,
     )
-    model.learn(timesteps=57_000)
+    model.learn(timesteps=59_000)
     model.quit()
 
     return model
@@ -1249,7 +1271,7 @@ if __name__ == "__main__":
     # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
     # model.quit()
 
-    NUM_EXPS = 1
+    NUM_EXPS = 10
     TRAIN_STEPS = 1
 
     for _ in range(NUM_EXPS):
