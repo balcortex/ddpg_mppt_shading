@@ -3,20 +3,15 @@ from __future__ import annotations
 import json
 import numbers
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from pathlib import Path
-from typing import Any, DefaultDict, Dict, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import gym
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 import torch as th
-from matplotlib.figure import Figure
+from matplotlib.figure import
 from torch.optim import Adam, Optimizer
-from tqdm import tqdm, utils
-
-import gc
+from tqdm import tqdm
 
 import src.policy
 import src.utils
@@ -1185,8 +1180,8 @@ class PO(DDPGExperience):
 def run_ddpgexp():
     model = DDPGExperience(
         demo_buffer_size=20000,
-        use_q_filter=True,
-        warmup_train_steps=0,
+        use_q_filter=False,
+        warmup_train_steps=5000,
         prefill_buffer=1000,
         train_steps=TRAIN_STEPS,
         lambda_bc=1.0,
@@ -1202,8 +1197,8 @@ def run_ddpgexp():
 def run_td3exp():
     model = TD3Experience(
         demo_buffer_size=20000,
-        use_q_filter=True,
-        warmup_train_steps=0,
+        use_q_filter=False,
+        warmup_train_steps=5000,
         prefill_buffer=1000,
         train_steps=TRAIN_STEPS,
         lambda_bc=1.0,
