@@ -1269,8 +1269,8 @@ if __name__ == "__main__":
     TRAIN_STEPS = 1
 
     for _ in range(NUM_EXPS):
+        run_po()
         run_ddpg()
         run_td3()
         run_ddpgexp()
         run_td3exp()
-        run_po()

@@ -64,7 +64,7 @@ DEFAULT_NORM_DIC = {
 DEFAULT_LOG_PATH = Path("default")
 DEFAULT_REWARD_TYPE = 0
 DEFAULT_REWARD = {
-    # "norm_delta_power": 0.0,
+    # "norm_delta_power": 2.0,
     "norm_power": 1.0,
     # "efficiency": 1.0,
     # "delta_efficiency": 1.0,
@@ -556,6 +556,11 @@ class ShadedPVEnv(CustomEnv):
     def reward(self) -> numbers.Real:
         """Return the reward at each step"""
         rew = sum(self._history[k][-1] * v for k, v in self._reward.items())
+        rew_ = self._history["norm_delta_power"][-1]
+
+        if rew_ > 0:
+            return rew
+        return -1
 
         if self._reward_type == 0:
             return rew
