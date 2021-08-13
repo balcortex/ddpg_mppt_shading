@@ -448,6 +448,9 @@ class TD3Experience(Model):
                 self.env_tracker_test.print_tracking(avg=n_eval_episodes)
                 print()
 
+                if n_eval_episodes != self.env_test.available_weather_days:
+                    self.env_test._day_idx = 0
+
             # - - - Logging
             if self.env_tracker.new_episode_available:
                 print(f"\nEval num_timesteps={ts_counter}")
@@ -839,12 +842,12 @@ class BC(TD3Experience):
         batch_size: int = 64,
         demo_buffer_size: int = 10_000,
         actor_lr: float = 1e-3,
-        actor_l2: float = 0.0,
+        actor_l2: float = 1e-6,
         n_steps: int = 1,
         norm_rewards: int = 0,
         train_steps: int = 1,
         use_per: bool = False,
-        warmup_train_steps: int = 100,
+        warmup_train_steps: int = 0,
         lambda_bc: float = 1.0,
         target_action_epsilon_noise: float = 0,
         env_kwargs: Optional[Dict[Any, Any]] = None,
@@ -1178,16 +1181,17 @@ class PO(DDPGExperience):
 
 def run_ddpgexp():
     model = DDPGExperience(
-        demo_buffer_size=20000,
+        demo_buffer_size=6000,
         use_q_filter=True,
-        warmup_train_steps=5000,
+        warmup_train_steps=0,
         prefill_buffer=1000,
         train_steps=TRAIN_STEPS,
-        lambda_bc=1.0,
+        lambda_bc=10.0,
         policy_kwargs=explore_policy_kwargs2,
-        include_demo_metrics=False,
+        include_demo_metrics=True,
+        norm_rewards=NORM_REWARDS,
     )
-    model.learn(timesteps=59_000)
+    model.learn(timesteps=53_000)
     model.quit()
 
     return model
@@ -1195,16 +1199,17 @@ def run_ddpgexp():
 
 def run_td3exp():
     model = TD3Experience(
-        demo_buffer_size=20000,
+        demo_buffer_size=6000,
         use_q_filter=True,
-        warmup_train_steps=5000,
+        warmup_train_steps=0,
         prefill_buffer=1000,
         train_steps=TRAIN_STEPS,
-        lambda_bc=1.0,
+        lambda_bc=10.0,
         policy_kwargs=explore_policy_kwargs2,
-        include_demo_metrics=False,
+        include_demo_metrics=True,
+        norm_rewards=NORM_REWARDS,
     )
-    model.learn(timesteps=59_000)
+    model.learn(timesteps=53_000)
     model.quit()
 
     return model
@@ -1216,6 +1221,7 @@ def run_ddpg():
         prefill_buffer=1000,
         train_steps=TRAIN_STEPS,
         policy_kwargs=explore_policy_kwargs2,
+        norm_rewards=NORM_REWARDS,
     )
     model.learn(timesteps=59_000)
     model.quit()
@@ -1229,6 +1235,7 @@ def run_td3():
         prefill_buffer=1000,
         train_steps=TRAIN_STEPS,
         policy_kwargs=explore_policy_kwargs2,
+        norm_rewards=NORM_REWARDS,
     )
     model.learn(timesteps=59_000)
     model.quit()
@@ -1237,8 +1244,26 @@ def run_td3():
 
 
 def run_po():
-    model = PO(demo_buffer_size=60_000)
+    model = PO(
+        demo_buffer_size=60_000,
+        norm_rewards=NORM_REWARDS,
+    )
     model.learn(timesteps=1)
+    model.quit()
+
+    return model
+
+
+def run_bc():
+    model = BC(
+        demo_buffer_size=60_000,
+        norm_rewards=NORM_REWARDS,
+    )
+    model.learn(
+        timesteps=50_000,
+        # n_eval_episodes=1,
+        # val_every_timesteps=1000,
+    )
     model.quit()
 
     return model
@@ -1247,7 +1272,6 @@ def run_po():
 if __name__ == "__main__":
     from src.noise import GaussianNoise
     from src.schedule import LinearSchedule
-    import gc
 
     explore_policy_kwargs = {
         "noise": GaussianNoise(0, 0.05),
@@ -1261,15 +1285,15 @@ if __name__ == "__main__":
         "decrease_noise": True,
     }
 
-    # model = BC(demo_buffer_size=5000)
-    # model.learn(timesteps=30_000, val_every_timesteps=1_000, plot_every_timesteps=1000)
-    # model.quit()
-
-    NUM_EXPS = 10
+    NUM_EXPS = 40
     TRAIN_STEPS = 1
+    NORM_REWARDS = 0
 
+    # run_po()
+    # run_bc()
+    # run_td3exp()
     for _ in range(NUM_EXPS):
-        run_po()
+        # run_po()
         run_ddpg()
         run_td3()
         run_ddpgexp()
