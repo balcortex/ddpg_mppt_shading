@@ -247,6 +247,34 @@ def plot_seq(
     return fig
 
 
+def local_max(x: Sequence[numbers.Real]) -> Sequence[numbers.Real]:
+    """Find the local maximums of a sequence"""
+    mask = local_max_index_mask(x)
+    return [x[i] for i, m in enumerate(mask) if m]
+
+
+def local_argmax(x: Sequence[numbers.Real]) -> Sequence[int]:
+    """Find the indices of the local maximums of a sequence"""
+    mask = local_max_index_mask(x)
+    return [i for i, m in enumerate(mask) if m]
+
+
+def local_max_index_mask(x: Sequence[numbers.Real]) -> Sequence[bool]:
+    """Find the index mask of the local maximums of a sequence"""
+
+    indices = [False]
+
+    for a, b, c in zip(x[:], x[1:], x[2:]):
+        if a < b > c:
+            indices.append(True)
+        else:
+            indices.append(False)
+
+    indices.append(False)
+
+    return indices
+
+
 if __name__ == "__main__":
     # dic = {
     #     "bel": "hola",

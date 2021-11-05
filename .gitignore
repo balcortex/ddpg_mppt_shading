@@ -139,3 +139,5 @@ slprj
 # project
 /default/*
 !/default/log.txt
+results/
+.vscode/

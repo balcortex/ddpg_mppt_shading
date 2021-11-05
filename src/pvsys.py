@@ -336,7 +336,7 @@ class ShadedArray:
 
     @property
     def num_modules(self) -> int:
-        """"Number of PV Modules in the system"""
+        """ "Number of PV Modules in the system"""
         return len(self.g)
 
     @staticmethod
@@ -373,9 +373,23 @@ class ShadedArray:
         """
 
         mpp = ShadedArray.mpp_from_curve(curve)
+        lmpp = ShadedArray.allmpp_from_curve(curve)
+        lmpp = [lmpp_ for lmpp_ in lmpp if not lmpp_ == mpp]
+
+        lmpp_yaxis = []
+        lmpp_xaxis = []
+        for p in lmpp:
+            voltage = p.voltage
+            lmpp_yaxis.append(voltage * p.current)
+            lmpp_xaxis.append(voltage)
+
+        # mpp_lengend = "MPP" if not lmpp_yaxis else "GMPP"
 
         fig = plt.figure()
         ax = fig.add_subplot(111)
+
+        plt.rc("text", usetex=True)
+        plt.rc("font", family="serif")
 
         if type_ == "iv":
             ax.plot(curve.voltage, curve.current)
@@ -383,8 +397,20 @@ class ShadedArray:
             ax.set_xlabel("Voltage (V)")
             ax.set_ylabel("Current (A)")
         elif type_ == "pv":
-            ax.plot(curve.voltage, ShadedArray.power(curve.voltage, curve.current))
-            ax.plot(mpp.voltage, ShadedArray.power(mpp.voltage, mpp.current), "o")
+            ax.plot(
+                curve.voltage,
+                ShadedArray.power(curve.voltage, curve.current),
+                "k",
+            )
+            ax.plot(
+                mpp.voltage,
+                ShadedArray.power(mpp.voltage, mpp.current),
+                "ob",
+                label="MPP" if not lmpp_yaxis else "GMPP",
+            )
+            if len(lmpp_yaxis):
+                ax.plot(lmpp_xaxis, lmpp_yaxis, "or", label="LMPP", mfc="none")
+            ax.legend(loc="upper left")
             ax.set_xlabel("Voltage (V)")
             ax.set_ylabel("Power (W)")
         elif type_ == "pd":
@@ -409,6 +435,24 @@ class ShadedArray:
             power=power[idx],
             duty_cycle=curve.duty_cycle[idx],
         )
+
+    @staticmethod
+    def allmpp_from_curve(curve: ShadedIVCurve) -> Sequence[SimulinkModelOutput]:
+        """Return a sequence of MPP of a given curve"""
+        power = ShadedArray.power(curve.current, curve.voltage)
+        idxs = utils.local_argmax(power)
+
+        mpps = []
+        for idx in idxs:
+            mpp = MPP(
+                current=curve.current[idx],
+                voltage=curve.voltage[idx],
+                power=power[idx],
+                duty_cycle=curve.duty_cycle[idx],
+            )
+            mpps.append(mpp)
+
+        return mpps
 
     @classmethod
     def get_default_array(cls) -> ShadedArray:
