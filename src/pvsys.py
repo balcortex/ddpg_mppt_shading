@@ -227,7 +227,7 @@ class ShadedArray:
         self,
         irradiance: Optional[Sequence[numbers.Real]] = None,
         ambient_temperature: Optional[Sequence[numbers.Real]] = None,
-        curve_points: int = 10 ** DECIMALS,
+        curve_points: int = 10**DECIMALS,
         verbose: bool = False,
     ) -> ShadedIVCurve:
         """Get the IV curve for the PV system and each of its modules"""
@@ -248,7 +248,7 @@ class ShadedArray:
         self,
         irradiance: Optional[Sequence[numbers.Real]] = None,
         ambient_temperature: Optional[Sequence[numbers.Real]] = None,
-        curve_points: int = 10 ** DECIMALS,
+        curve_points: int = 10**DECIMALS,
         verbose: bool = False,
     ) -> SimulinkModelOutput:
         """Compute the MPP"""
@@ -359,6 +359,20 @@ class ShadedArray:
 
         return (
             np.array(ambient_temp) + (noct - 20) * (np.array(irradiance) / g_ref)
+        ).round(decimals)
+
+    @staticmethod
+    def ambient_temp_from_cell(
+        irradiance: Union[numbers.Real, Sequence[numbers.Real]],
+        cell_temp: Union[numbers.Real, Sequence[numbers.Real]],
+        decimals: int = 2,
+    ) -> float:
+        "Estimate cell temperature from ambient temperature and irradiance"
+        noct = 45
+        g_ref = 800
+
+        return (
+            np.array(cell_temp) - (noct - 20) * (np.array(irradiance) / g_ref)
         ).round(decimals)
 
     @staticmethod
