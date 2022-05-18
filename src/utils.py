@@ -259,20 +259,48 @@ def local_argmax(x: Sequence[numbers.Real]) -> Sequence[int]:
     return [i for i, m in enumerate(mask) if m]
 
 
+# def local_max_index_mask(x: Sequence[numbers.Real]) -> Sequence[bool]:
+#     """Find the index mask of the local maximums of a sequence"""
+
+#     indices = [False]
+
+#     for a, b, c in zip(x[:], x[1:], x[2:]):
+#         if a < b > c or a == b:
+#             indices.append(True)
+#         else:
+#             indices.append(False)
+
+#     indices.append(False)
+
+#     return indices
+
+
 def local_max_index_mask(x: Sequence[numbers.Real]) -> Sequence[bool]:
     """Find the index mask of the local maximums of a sequence"""
 
-    indices = [False]
+    indeces = [False]  # Skip the first item
+    flags = [False, False]  # Negative and positive slope flags
 
-    for a, b, c in zip(x[:], x[1:], x[2:]):
-        if a < b > c:
-            indices.append(True)
+    for x0, x1 in zip(x[:], x[1:]):
+        delta = x1 - x0
+
+        if delta > 0:
+            flags[1] = True  # Positive slope
+        elif delta < 0:
+            flags[0] = True  # Negative slope
+
+        # If both flags are True, a slope change was found
+        if all(flags) and delta < 0:  # Only check for max
+            # The max was in the previous item
+            indeces.pop()
+            indeces.append(True)
+            indeces.append(False)
+            # Reset flags
+            flags = [False, False]
         else:
-            indices.append(False)
+            indeces.append(False)
 
-    indices.append(False)
-
-    return indices
+    return indeces
 
 
 if __name__ == "__main__":
