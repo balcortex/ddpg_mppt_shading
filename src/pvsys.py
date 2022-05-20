@@ -124,6 +124,11 @@ class ShadedArray:
         self.cache = utils.read_dic_txt(self.cache_path)
         self.cache_mpp = utils.read_dic_txt(self.cache_mpp_path)
 
+    def clear_cache(self) -> None:
+        """Clear the cache files. Be careful, this will erase all the data in the files"""
+        self.cache.clear()
+        self.cache_mpp.clear()
+
     def set_params(self, params: Optional[Dict[str, Any]] = None) -> None:
         """
         Update the simulation parameters with a Dictionary. If a Dict is not
