@@ -9,7 +9,7 @@ from matplotlib.figure import Figure
 
 PATH = Path(r"C:\Users\balco\Downloads\phd_data")
 DAY_INDEX = [1, 3, 25, 27]
-FOLDER_INDEX = [1,2,3,4]
+FOLDER_INDEX = [1, 2, 3, 4]
 DAY_ALONE_INDEX = 5
 CB91_Blue = "#2CBDFE"
 CB91_Green = "#47DBCD"
@@ -141,9 +141,10 @@ def main_plot_day():
             feature="power",
         )
 
-        p = plot_combined(df, ylabel='Power (W)')
+        p = plot_combined(df, ylabel="Power (W)")
 
-        p.savefig(f"output\\fig_07_mppt_comparison_{i:02}.pdf", bbox_inches="tight")
+        p.savefig(f"output\\mppt_comparison_reward_{i:02}.pdf", bbox_inches="tight")
+
 
 def main_plot_mean():
     for i, day in enumerate(DAY_INDEX, start=1):
@@ -151,7 +152,6 @@ def main_plot_mean():
         ddpg_test_files = list(get_files("ddpg_test", day))
         td3_test_files = list(get_files("td3_test", day))
         td4_test_files = list(get_files("td3exp_test", day))
-
 
         assert len(po_test_files) == 1
         assert len(ddpg_test_files) == 110
@@ -169,11 +169,13 @@ def main_plot_mean():
             feature="power",
         )
 
-        p = plot_combined(df, ylabel='Power (W)')
+        p = plot_combined(df, ylabel="Power (W)")
 
-        p.savefig(f"output\\fig_09_mppt_mean_comparison_{i:02}.pdf", bbox_inches="tight")
+        p.savefig(
+            f"output\\mppt_comparison_mean_reward_{i:02}.pdf", bbox_inches="tight"
+        )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main_plot_day()
     main_plot_mean()
